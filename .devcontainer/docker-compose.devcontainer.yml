@@ -1,0 +1,12 @@
+services:
+  dev:
+    image: mcr.microsoft.com/devcontainers/base:ubuntu
+
+    volumes:
+      - .:/workspaces/capstone-rag:cached
+
+    command: sleep infinity
+
+    depends_on:
+      db:
+        condition: service_healthy
