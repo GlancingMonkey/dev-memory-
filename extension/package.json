@@ -1,0 +1,83 @@
+{
+  "name": "code-memory",
+  "displayName": "code-memory",
+  "description": "",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.138.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codeMemory.saveSnippet",
+        "title": "Code Memory: 선택한 코드 저장"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "codeMemory.saveSnippet",
+          "when": "editorHasSelection",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "codeMemory.saveSnippet",
+        "key": "ctrl+alt+s",
+        "when": "editorHasSelection"
+      }
+    ],
+    "configuration": {
+      "title": "Code Memory",
+      "properties": {
+        "codeMemory.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "백엔드 API 주소"
+        },
+        "codeMemory.mock": {
+          "type": "boolean",
+          "default": true,
+          "description": "백엔드 없이 가짜 응답으로 테스트"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.138.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "typescript-eslint": "^8.61.1",
+    "eslint": "^10.5.0",
+    "esbuild": "^0.28.1",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^6.0.3",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6"
+  }
+}
