@@ -34,6 +34,24 @@
         "when": "editorHasSelection"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codeMemory",
+          "title": "Code Memory",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "codeMemory": [
+        {
+          "type": "webview",
+          "id": "codeMemory.searchView",
+          "name": "검색"
+        }
+      ]
+    },
     "configuration": {
       "title": "Code Memory",
       "properties": {

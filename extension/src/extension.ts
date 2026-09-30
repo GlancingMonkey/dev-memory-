@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-
+import { SearchViewProvider } from './sidebar';
 // ─────────────────────────────────────────────
 // 1. 스니펫의 모양 — 팀이 정한 JSON 형식
 // ─────────────────────────────────────────────
@@ -134,7 +134,7 @@ async function postSnippet(snippet: Snippet): Promise<{ id: number }> {
 }
 
 // ─────────────────────────────────────────────
-// 5. 확장 시작점 — package.json 의 명령 ID 와 실제 동작을 연결
+// 5. 확장 시작점 — package.json 의 명령·패널 ID 와 실제 동작을 연결
 // ─────────────────────────────────────────────
 export function activate(context: vscode.ExtensionContext) {
   const command = vscode.commands.registerCommand('codeMemory.saveSnippet', async () => {
@@ -159,6 +159,16 @@ export function activate(context: vscode.ExtensionContext) {
 
     output.show(true);
   });
+
+  // 사이드바 검색 패널 등록
+  // retainContextWhenHidden: 다른 사이드바 탭 갔다 와도 검색 결과가 안 날아가게
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      SearchViewProvider.viewId,
+      new SearchViewProvider(),
+      { webviewOptions: { retainContextWhenHidden: true } }
+    )
+  );
 
   context.subscriptions.push(command, output);
 }
