@@ -14,7 +14,3 @@ out/
 # OS
 .DS_Store
 Thumbs.db
-
-# Downloaded embedding model weights
-rag/experiments/embedding_compare/cache/
-
