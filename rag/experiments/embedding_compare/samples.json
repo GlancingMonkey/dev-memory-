@@ -1,0 +1,26 @@
+{
+  "documents": [
+    {"id": "doc_commit", "language": "ko", "text": "저장 성공 응답은 트랜잭션 커밋이 완료된 뒤 반환한다. 저장 도중 오류가 발생하면 롤백하고 실패 응답을 반환한다."},
+    {"id": "doc_size", "language": "ko", "text": "업로드 데이터는 UTF-8로 인코딩한 바이트 수를 기준으로 크기를 검사한다. 글자 수가 같아도 한글과 영문은 바이트 수가 다를 수 있다. 제한을 넘으면 저장 전에 요청을 거절한다."},
+    {"id": "java_create", "language": "Java", "text": "public Record create(Record value) {\n    if (repository.existsById(value.id())) {\n        throw new IllegalStateException(\"duplicate id\");\n    }\n    return repository.save(value);\n}"},
+    {"id": "java_delete", "language": "Java", "text": "public void delete(String id) {\n    if (!repository.existsById(id)) {\n        throw new IllegalArgumentException(\"missing id\");\n    }\n    repository.deleteById(id);\n}"},
+    {"id": "python_atomic", "language": "Python", "text": "import os\nimport tempfile\n\ndef save_atomic(path, content):\n    with tempfile.NamedTemporaryFile(mode=\"w\", dir=os.path.dirname(path), delete=False, encoding=\"utf-8\") as temp:\n        temp.write(content)\n        temp_path = temp.name\n    os.replace(temp_path, path)"},
+    {"id": "python_append", "language": "Python", "text": "def append_text(path, content):\n    with open(path, \"a\", encoding=\"utf-8\") as target:\n        target.write(content)"},
+    {"id": "ts_save", "language": "TypeScript", "text": "function saveObject(key: string, value: unknown): void {\n    const serialized = JSON.stringify(value);\n    localStorage.setItem(key, serialized);\n}"},
+    {"id": "ts_load", "language": "TypeScript", "text": "function loadObject(key: string): unknown {\n    const serialized = localStorage.getItem(key);\n    return serialized === null ? null : JSON.parse(serialized);\n}"},
+    {"id": "python_mean", "language": "Python", "text": "def average(values):\n    if not values:\n        return 0.0\n    return sum(values) / len(values)"},
+    {"id": "python_median", "language": "Python", "text": "def median(values):\n    if not values:\n        return 0.0\n    ordered = sorted(values)\n    mid = len(ordered) // 2\n    if len(ordered) % 2:\n        return ordered[mid]\n    return (ordered[mid - 1] + ordered[mid]) / 2"}
+  ],
+  "queries": [
+    {"id": "ko_doc_1", "group": "ko_doc", "text": "저장 성공 응답을 커밋 전과 후 중 언제 반환해야 해?", "expected": "doc_commit"},
+    {"id": "ko_doc_2", "group": "ko_doc", "text": "한글 업로드 제한은 글자 수로 검사해도 되나?", "expected": "doc_size"},
+    {"id": "ko_java", "group": "ko_code", "text": "Java에서 같은 ID가 이미 있으면 예외를 내고 새 레코드를 저장하는 코드를 찾아줘.", "expected": "java_create"},
+    {"id": "en_java", "group": "en_code", "text": "Find Java code that rejects an existing ID with an exception before saving a new record.", "expected": "java_create"},
+    {"id": "ko_atomic", "group": "ko_code", "text": "Python에서 임시 파일에 쓴 다음 기존 파일을 원자적으로 교체하는 코드를 찾아줘.", "expected": "python_atomic"},
+    {"id": "en_atomic", "group": "en_code", "text": "Find Python code that writes to a temporary file and then atomically replaces the destination file.", "expected": "python_atomic"},
+    {"id": "ko_ts", "group": "ko_code", "text": "TypeScript에서 객체를 JSON 문자열로 바꿔 브라우저 저장소에 넣는 코드를 찾아줘.", "expected": "ts_save"},
+    {"id": "en_ts", "group": "en_code", "text": "Find TypeScript code that serializes an object as JSON and saves it in browser storage.", "expected": "ts_save"},
+    {"id": "ko_mean", "group": "ko_code", "text": "Python에서 리스트의 산술 평균을 구하고 빈 리스트면 0을 반환하는 코드를 찾아줘.", "expected": "python_mean"},
+    {"id": "en_mean", "group": "en_code", "text": "Find Python code that computes the arithmetic mean of a list and returns zero for an empty list.", "expected": "python_mean"}
+  ]
+}
