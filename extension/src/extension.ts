@@ -1,17 +1,23 @@
 import * as vscode from 'vscode';
 import { SearchViewProvider } from './sidebar';
 // ─────────────────────────────────────────────
-// 1. 스니펫의 모양 — 팀이 정한 JSON 형식
+// 1. 스니펫의 모양
+//    Snippet   = 백엔드로 "보내는" 객체. 계약의 7개 필드만 들어간다.
+//    Collected = 수집 결과. 보내는 객체 + 내 PC 에서만 쓰는 정보(절대 경로).
 // ─────────────────────────────────────────────
 export interface Snippet {
-  project_name: string | null;
-  file_path: string;          // 프로젝트 기준 상대 경로 (예: src/Main.java)
-  absolute_path: string;      // ※ 팀 스펙 외 추가 — 나중에 "원본 파일로 이동"에 필요
+  project_name: string;
+  file_path: string;          // Workspace 폴더 기준 상대 경로, 구분자는 /
   language: string;
   function_name: string | null;
   start_line: number;
   end_line: number;
   code: string;
+}
+
+interface Collected {
+  snippet: Snippet;
+  absolutePath: string;       // 로컬 전용 — POST 에 넣지 않는다
 }
 
 // 결과를 찍어볼 "출력" 패널 채널
@@ -68,22 +74,37 @@ function findFunctionName(doc: vscode.TextDocument, fromLine: number): string | 
 
 // ─────────────────────────────────────────────
 // 3. 정보 수집 — 선택한 코드 + 그 코드가 어디서 왔는지
+//    저장하면 안 되는 경우(새 파일, 폴더 밖 파일, 빈 선택)는 여기서 막는다.
 // ─────────────────────────────────────────────
-function collectSnippet(): Snippet | null {
+function collectSnippet(): Collected | null {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
     vscode.window.showWarningMessage('열려 있는 편집기가 없습니다.');
     return null;
   }
-  if (editor.selection.isEmpty) {
+
+  const doc = editor.document;
+  const sel = editor.selection;
+
+  // 아직 디스크에 저장 안 된 새 파일(Untitled) → 경로가 없으니 차단
+  if (doc.isUntitled) {
+    vscode.window.showWarningMessage('아직 저장되지 않은 새 파일입니다. 프로젝트 폴더 안에 파일로 저장한 뒤 다시 시도하세요.');
+    return null;
+  }
+
+  // 열려 있는 프로젝트 폴더(Workspace)에 속하지 않은 파일 → 프로젝트명을 알 수 없으니 차단
+  const folder = vscode.workspace.getWorkspaceFolder(doc.uri);
+  if (!folder) {
+    vscode.window.showWarningMessage('프로젝트 폴더에 속한 파일이 아닙니다. [파일 > 폴더 열기]로 프로젝트 폴더를 연 뒤 그 안의 파일에서 저장하세요.');
+    return null;
+  }
+
+  if (sel.isEmpty) {
     vscode.window.showWarningMessage('저장할 코드를 먼저 선택하세요.');
     return null;
   }
 
-  const doc = editor.document;
-  const sel = editor.selection;
   const code = doc.getText(sel);
-
   if (code.trim().length === 0) {
     vscode.window.showWarningMessage('공백만 선택되었습니다.');
     return null;
@@ -97,40 +118,82 @@ function collectSnippet(): Snippet | null {
   }
 
   return {
-    project_name: vscode.workspace.getWorkspaceFolder(doc.uri)?.name ?? null,
-    file_path: vscode.workspace.asRelativePath(doc.uri, false).replace(/\\/g, '/'),
-    absolute_path: doc.uri.fsPath,
-    language: doc.languageId,
-    function_name: findFunctionName(doc, sel.start.line),
-    start_line: sel.start.line + 1,   // VS Code 는 0부터 센다 → 사람 기준 1부터로
-    end_line: endLine + 1,
-    code,
+    snippet: {
+      project_name: folder.name,
+      file_path: vscode.workspace.asRelativePath(doc.uri, false).replace(/\\/g, '/'),
+      language: doc.languageId,
+      function_name: findFunctionName(doc, sel.start.line),
+      start_line: sel.start.line + 1,   // VS Code 는 0부터 센다 → 사람 기준 1부터로
+      end_line: endLine + 1,
+      code,
+    },
+    absolutePath: doc.uri.fsPath,
   };
 }
 
 // ─────────────────────────────────────────────
 // 4. 백엔드 전송 — POST /snippets
-//    mock 설정이 켜져 있으면 서버 없이 가짜 응답
+//    mock 설정이 켜져 있으면 서버를 아예 호출하지 않는다 (가짜 응답).
 // ─────────────────────────────────────────────
-async function postSnippet(snippet: Snippet): Promise<{ id: number }> {
+interface SaveResult {
+  id: number;
+  mock: boolean;      // true 면 실제 저장이 아니다
+  detail: string;     // 출력 패널에 남길 근거 (주소, HTTP 상태, 응답 원문)
+}
+
+async function postSnippet(snippet: Snippet): Promise<SaveResult> {
   const config = vscode.workspace.getConfiguration('codeMemory');
 
   if (config.get<boolean>('mock', true)) {
     await new Promise((resolve) => setTimeout(resolve, 200));   // 네트워크 흉내
-    return { id: Date.now() };
+    return { id: Date.now(), mock: true, detail: 'mock=true — 서버 호출 안 함' };
   }
 
-  const baseUrl = config.get<string>('apiUrl', 'http://localhost:8000');
-  const res = await fetch(`${baseUrl}/snippets`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(snippet),
-  });
+  const baseUrl = config.get<string>('apiUrl', 'http://localhost:8000').replace(/\/+$/, '');
+  const url = `${baseUrl}/snippets`;
 
+  // 계약의 7개 필드만 골라서 보낸다 (객체를 통째로 넘기지 않는다)
+  const body = {
+    project_name: snippet.project_name,
+    file_path: snippet.file_path,
+    language: snippet.language,
+    function_name: snippet.function_name,
+    start_line: snippet.start_line,
+    end_line: snippet.end_line,
+    code: snippet.code,
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (err) {
+    // 서버가 꺼져 있음 / 주소 틀림 / 10초 동안 응답 없음
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`서버에 연결할 수 없습니다: ${url} (${reason})`);
+  }
+
+  const text = await res.text();
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    throw new Error(`HTTP ${res.status}: ${text}`);
   }
-  return (await res.json()) as { id: number };
+
+  // 성공 응답인데 id 가 없으면 성공으로 치지 않는다
+  let id: unknown;
+  try {
+    id = (JSON.parse(text) as { id?: unknown }).id;
+  } catch {
+    id = undefined;
+  }
+  if (typeof id !== 'number') {
+    throw new Error(`응답에 id 가 없습니다: HTTP ${res.status} ${text}`);
+  }
+
+  return { id, mock: false, detail: `POST ${url} → HTTP ${res.status} ${text}` };
 }
 
 // ─────────────────────────────────────────────
@@ -138,19 +201,27 @@ async function postSnippet(snippet: Snippet): Promise<{ id: number }> {
 // ─────────────────────────────────────────────
 export function activate(context: vscode.ExtensionContext) {
   const command = vscode.commands.registerCommand('codeMemory.saveSnippet', async () => {
-    const snippet = collectSnippet();
-    if (!snippet) {
+    const collected = collectSnippet();
+    if (!collected) {
       return;
     }
+    const { snippet, absolutePath } = collected;
 
-    output.appendLine(`[${new Date().toLocaleTimeString()}] 수집한 스니펫`);
+    output.appendLine(`[${new Date().toLocaleTimeString()}] 보낼 스니펫 (원본: ${absolutePath})`);
     output.appendLine(JSON.stringify(snippet, null, 2));
 
     try {
       const saved = await postSnippet(snippet);
       const where = snippet.function_name ?? snippet.file_path;
-      vscode.window.showInformationMessage(`저장했습니다 (id ${saved.id}) — ${where}`);
-      output.appendLine(`→ 저장 완료 id=${saved.id}\n`);
+      output.appendLine(`→ ${saved.detail}`);
+
+      if (saved.mock) {
+        output.appendLine(`→ [mock] 실제 저장 아님 (가짜 id=${saved.id})\n`);
+        vscode.window.showInformationMessage(`[mock] 저장 흉내만 냈습니다 — ${where}`);
+      } else {
+        output.appendLine(`→ 저장 완료 id=${saved.id}\n`);
+        vscode.window.showInformationMessage(`저장했습니다 (id ${saved.id}) — ${where}`);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       output.appendLine(`→ 저장 실패: ${message}\n`);
