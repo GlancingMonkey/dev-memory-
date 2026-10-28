@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS snippets (
     start_line INTEGER NOT NULL,
     end_line INTEGER NOT NULL,
     code TEXT NOT NULL,
+    embedding vector(768),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
