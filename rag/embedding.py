@@ -11,7 +11,8 @@ EMBEDDING_DIM = 768
 MAX_TOKENS = 512
 _MODEL_LOCK = Lock()
 
-
+class EmbeddingInputError(ValueError):
+    """입력이 비었거나 토큰 제한을 초과한 경우."""
 @lru_cache(maxsize=1)
 def _load_model() -> SentenceTransformer:
     model = SentenceTransformer(
@@ -29,7 +30,7 @@ def _embed(text: str, prefix: str) -> list[float]:
     if not isinstance(text, str):
         raise TypeError("text must be a string")
     if not text.strip():
-        raise ValueError("text must not be empty")
+        raise EmbeddingInputError("text must not be empty")
 
     with _MODEL_LOCK:
         model = _load_model()
@@ -39,7 +40,7 @@ def _embed(text: str, prefix: str) -> list[float]:
         model.tokenizer(input_text, truncation=False)["input_ids"]
     )
     if token_count > MAX_TOKENS:
-        raise ValueError(
+        raise EmbeddingInputError(
             f"Input has {token_count} tokens; limit is {MAX_TOKENS}, "
             "including prefix and special tokens"
         )
