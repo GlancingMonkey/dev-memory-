@@ -13,45 +13,43 @@ export interface SearchResult {
   start_line: number;
   end_line: number;
   code: string;
-  score: number;   // 0~1, 클수록 비슷함
+  score: number;   // 의미(유사도/거리)·범위는 #12 계약에서 확정
 }
 
-// mock 결과 — 실제로 존재하는 파일·줄을 가리키게 해서 "원본 열기"도 테스트되게 함
+// mock 결과 — 문서 12쪽 테스트 파일 3개 (C:\dev\mvp-save-test 에 실제로 있어야 "원본 열기"가 됨)
+// absolute_path 를 일부러 안 넣었다: 실제 API 결과처럼 "열린 폴더 이름 + 상대 경로"로 찾는 길을 그대로 테스트
 const MOCK_RESULTS: SearchResult[] = [
   {
     id: 1,
-    project_name: 'capstone-rag',
-    file_path: 'extension/src/extension.ts',
-    absolute_path: '/workspaces/capstone-rag/extension/src/extension.ts',
-    language: 'typescript',
-    function_name: 'findFunctionName',
-    start_line: 57,
-    end_line: 73,
-    code: 'function findFunctionName(doc: vscode.TextDocument, fromLine: number): string | null {\n  const patterns = DECL_PATTERNS[doc.languageId];\n  if (!patterns) {\n    return null;\n  }',
+    project_name: 'mvp-save-test',
+    file_path: 'sample.py',
+    language: 'python',
+    function_name: 'add',
+    start_line: 1,
+    end_line: 2,
+    code: 'def add(a, b):\n    return a + b',
     score: 0.91,
   },
   {
     id: 2,
-    project_name: 'capstone-rag',
-    file_path: 'extension/src/extension.ts',
-    absolute_path: '/workspaces/capstone-rag/extension/src/extension.ts',
-    language: 'typescript',
-    function_name: 'collectSnippet',
-    start_line: 79,
-    end_line: 132,
-    code: 'function collectSnippet(): Collected | null {\n  const editor = vscode.window.activeTextEditor;\n  if (!editor) {',
+    project_name: 'mvp-save-test',
+    file_path: 'even_numbers.py',
+    language: 'python',
+    function_name: 'even_numbers',
+    start_line: 1,
+    end_line: 2,
+    code: 'def even_numbers(values):\n    return [n for n in values if n % 2 == 0]',
     score: 0.84,
   },
   {
     id: 3,
-    project_name: 'capstone-rag',
-    file_path: 'extension/src/extension.ts',
-    absolute_path: '/workspaces/capstone-rag/extension/src/extension.ts',
-    language: 'typescript',
-    function_name: 'postSnippet',
-    start_line: 144,
-    end_line: 197,
-    code: 'async function postSnippet(snippet: Snippet): Promise<SaveResult> {\n  const config = vscode.workspace.getConfiguration(\'codeMemory\');',
+    project_name: 'mvp-save-test',
+    file_path: 'sort_users.py',
+    language: 'python',
+    function_name: 'sort_users',
+    start_line: 1,
+    end_line: 2,
+    code: 'def sort_users(users):\n    return sorted(users, key=lambda user: user["age"])',
     score: 0.77,
   },
 ];
@@ -67,14 +65,36 @@ async function searchSnippets(query: string): Promise<SearchResult[]> {
     return MOCK_RESULTS;   // mock 은 검색어와 상관없이 샘플 3개
   }
 
-  const baseUrl = config.get<string>('apiUrl', 'http://localhost:8000');
+  // ※ 경로·파라미터·응답 모양은 아직 공식 계약 전 초안. #12 합의 후 여기만 맞추면 된다.
+  const baseUrl = config.get<string>('apiUrl', 'http://localhost:8000').replace(/\/+$/, '');
   const url = `${baseUrl}/search?q=${encodeURIComponent(query)}&limit=10`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  } catch (err) {
+    // 서버 꺼짐 / 주소 틀림 / 10초 동안 응답 없음
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`서버에 연결할 수 없습니다: ${baseUrl} (${reason})`);
   }
-  const data = (await res.json()) as { results: SearchResult[] };
-  return data.results;
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${text}`);
+  }
+
+  // 응답이 예상한 모양이 아니면 빈 결과로 넘기지 말고 오류로 보여준다
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`응답이 JSON 이 아닙니다: ${text.slice(0, 200)}`);
+  }
+  const results = (data as { results?: unknown }).results;
+  if (!Array.isArray(results)) {
+    throw new Error(`응답에 results 배열이 없습니다: ${text.slice(0, 200)}`);
+  }
+  return results as SearchResult[];
 }
 
 // ─────────────────────────────────────────────
@@ -92,18 +112,31 @@ function resolveUri(r: SearchResult): vscode.Uri | null {
 async function openSource(r: SearchResult): Promise<void> {
   const uri = resolveUri(r);
   if (!uri) {
-    vscode.window.showWarningMessage('원본 파일 위치를 알 수 없습니다.');
+    // 다른 PC·다른 프로젝트에서 저장한 코드 → 엉뚱한 파일을 열지 않고 안내만
+    vscode.window.showWarningMessage(
+      `'${r.project_name ?? '(프로젝트 없음)'}' 프로젝트 폴더가 지금 열려 있지 않습니다. 그 폴더를 열고 다시 시도하세요.`
+    );
     return;
   }
+
+  let doc: vscode.TextDocument;
   try {
-    const doc = await vscode.workspace.openTextDocument(uri);
-    const start = Math.max(0, r.start_line - 1);                  // 1부터 → 0부터로
-    const end = Math.min(doc.lineCount - 1, r.end_line - 1);
-    const range = new vscode.Range(start, 0, end, doc.lineAt(end).text.length);
-    await vscode.window.showTextDocument(doc, { selection: range, preview: false });
+    doc = await vscode.workspace.openTextDocument(uri);
   } catch {
     vscode.window.showWarningMessage(`원본 파일을 찾을 수 없습니다: ${r.file_path}`);
+    return;
   }
+
+  // 저장 뒤 파일이 짧아졌으면 줄 번호가 안 맞는다 → 열기는 하되 알려준다
+  if (r.end_line > doc.lineCount) {
+    vscode.window.showWarningMessage(
+      `파일이 저장 때보다 짧습니다 (${r.end_line}줄 → 지금 ${doc.lineCount}줄). 위치가 다를 수 있습니다.`
+    );
+  }
+  const start = Math.min(Math.max(0, r.start_line - 1), doc.lineCount - 1);   // 1부터 → 0부터로
+  const end = Math.min(Math.max(start, r.end_line - 1), doc.lineCount - 1);
+  const range = new vscode.Range(start, 0, end, doc.lineAt(end).text.length);
+  await vscode.window.showTextDocument(doc, { selection: range, preview: false });
 }
 
 async function insertCode(code: string): Promise<void> {
@@ -241,11 +274,13 @@ function getHtml(webview: vscode.Webview): string {
     statusEl.textContent = results.length + '개 찾음';
 
     results.forEach(function (r) {
-      const name = r.function_name || r.file_path.split('/').pop();
+      const name = r.function_name || String(r.file_path || '').split('/').pop() || '(이름 없음)';
       const card = el('div', 'card');
 
       const head = el('div', 'head');
-      head.append(el('span', 'name', name), el('span', 'score', Math.round(r.score * 100) + '%'));
+      // score 는 퍼센트(정확도)가 아니다. 뜻(유사도/거리)이 계약으로 정해지기 전까지 숫자만 그대로 보여준다
+      const scoreText = typeof r.score === 'number' ? 'score ' + r.score.toFixed(3) : '';
+      head.append(el('span', 'name', name), el('span', 'score', scoreText));
 
       const meta = el('div', 'meta',
         (r.project_name || '-') + ' · ' + r.language + ' · ' + r.file_path + ':' + r.start_line);
