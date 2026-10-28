@@ -13,10 +13,10 @@ export interface SearchResult {
   start_line: number;
   end_line: number;
   code: string;
-  score: number;   // 의미(유사도/거리)·범위는 #12 계약에서 확정
+  score: number;   // 코사인 유사도 = 1 - cosine_distance, -1~1; 클수록 유사함
 }
 
-// mock 결과 — 문서 12쪽 테스트 파일 3개 (C:\dev\mvp-save-test 에 실제로 있어야 "원본 열기"가 됨)
+// mock 결과 — docs/DEVELOPMENT.md의 로컬 테스트 코드 3개; 원본 열기에는 실제 파일이 필요
 // absolute_path 를 일부러 안 넣었다: 실제 API 결과처럼 "열린 폴더 이름 + 상대 경로"로 찾는 길을 그대로 테스트
 const MOCK_RESULTS: SearchResult[] = [
   {
@@ -65,7 +65,7 @@ async function searchSnippets(query: string): Promise<SearchResult[]> {
     return MOCK_RESULTS;   // mock 은 검색어와 상관없이 샘플 3개
   }
 
-  // ※ 경로·파라미터·응답 모양은 아직 공식 계약 전 초안. #12 합의 후 여기만 맞추면 된다.
+  // API_CONTRACT.md: GET /search?q=...&limit=10 → { results: [...] }
   const baseUrl = config.get<string>('apiUrl', 'http://localhost:8000').replace(/\/+$/, '');
   const url = `${baseUrl}/search?q=${encodeURIComponent(query)}&limit=10`;
 
@@ -278,7 +278,7 @@ function getHtml(webview: vscode.Webview): string {
       const card = el('div', 'card');
 
       const head = el('div', 'head');
-      // score 는 퍼센트(정확도)가 아니다. 뜻(유사도/거리)이 계약으로 정해지기 전까지 숫자만 그대로 보여준다
+      // 코사인 유사도(-1~1)를 소수점으로 표시한다. 정답 확률이나 정확도 퍼센트가 아니다.
       const scoreText = typeof r.score === 'number' ? 'score ' + r.score.toFixed(3) : '';
       head.append(el('span', 'name', name), el('span', 'score', scoreText));
 
