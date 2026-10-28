@@ -65,4 +65,91 @@ id는 실제로 저장된 DB 행의 숫자 id이다. 예시의 2는 고정값이
 
 ### 현재 범위
 
-이번 API는 스니펫 저장만 수행한다. Embedding 생성, Semantic Search, RAG, LLM 호출은 후속 단계에서 별도로 설계한다.
+POST /snippets는 스니펫 저장만 수행한다.
+저장 직후 자동 Embedding 생성과 실패 재처리는 후속 단계다.
+검색은 아래 API 계약에 따라 사전에 벡터가 준비된 스니펫을 조회한다.
+
+## 3. GET /search
+
+자연어 질문을 Embedding한 뒤 PostgreSQL에서 관련 스니펫을 검색한다.
+이 API는 LLM을 호출하지 않는다.
+
+### Request — Query Parameters
+
+| 이름 | 타입 | 필수 여부 | 기본값 | 설명 |
+|---|---|---|---|---|
+| q | string | 필수 | 없음 | 검색할 자연어 질문 |
+| limit | integer | 선택 | 10 | 최대 결과 개수. 1~20 |
+
+- 질문은 앞뒤 공백을 제거한 후 처리하며, 빈 질문은 허용하지 않는다.
+- 질문 입력은 E5 접두사와 특수 토큰을 포함해 최대 512토큰이다.
+- 검색 대상은 embedding이 존재하고 영벡터가 아닌 행이다.
+- 전체 검색 대상에서 조회하며 테스트용 id로 제한하지 않는다.
+
+### Success Response — HTTP 200
+
+```json
+{
+  "results": [
+    {
+      "id": 1,
+      "project_name": "mvp-save-test",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "add",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def add(a, b):\r\n    return a + b",
+      "score": 0.848235
+    }
+  ]
+}
+```
+
+위 응답은 구조 예시다. score 예시는 기존 DB 검증 거리에서 계산했으며,
+새 검색 API를 실행해 측정한 응답은 아니다.
+
+- results는 검색 결과 배열이며 최대 limit개를 반환한다.
+- 각 결과는 실제 DB의 id, 기존 저장 7개 필드, score를 포함한다.
+- 기존 저장 필드의 타입은 POST /snippets 계약과 같다.
+- function_name은 문자열 또는 null이다.
+- score는 `1 - cosine_distance`로 계산한 코사인 유사도다.
+- score의 범위는 -1~1이며, 클수록 유사하다.
+- 코사인 거리 오름차순으로 정렬하고 동점이면 id 오름차순으로 정렬한다.
+- score는 정답 확률이나 검색 정확도 퍼센트가 아니다.
+
+### 검색 대상이 없는 경우 — HTTP 200
+
+```json
+{
+  "results": []
+}
+```
+
+벡터가 준비된 검색 대상이 없으면 빈 배열을 반환한다.
+관련 없는 질문이라는 이유만으로 빈 배열을 보장하지는 않는다.
+관련성 기준점에 따른 결과 제거는 후속 품질 검증에서 결정한다.
+
+### Request Validation Error — HTTP 422
+
+다음 경우 요청 검증 오류를 반환한다.
+
+- q 누락 또는 공백뿐인 질문
+- 접두사와 특수 토큰을 포함한 질문이 512토큰을 초과
+- limit이 정수가 아니거나 1~20 범위 밖인 경우
+
+오류는 detail 필드로 전달한다.
+파라미터 검증은 FastAPI 기본 오류 응답을 사용하고,
+추가 입력 검사는 detail 문자열을 사용할 수 있다.
+
+### 검색 서비스 준비 실패 — HTTP 503
+
+모델 준비 또는 Database 연결·검색을 수행할 수 없는 경우:
+
+```json
+{
+  "detail": "Search service unavailable"
+}
+```
+
+상세 원인은 서버 로그에 기록하고 연결 비밀값을 응답에 포함하지 않는다.
