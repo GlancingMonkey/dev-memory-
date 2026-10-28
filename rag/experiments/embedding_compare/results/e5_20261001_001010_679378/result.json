@@ -1,0 +1,359 @@
+{
+  "model": "intfloat/multilingual-e5-base",
+  "requested_revision": "main",
+  "resolved_revision": "d128750597153bb5987e10b1c3493a34e5a4502a",
+  "created_at_utc": "2026-09-30T15:10:10.616331+00:00",
+  "device": "cpu",
+  "dtype": "torch.float32",
+  "hardware": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+  "platform": "Windows-10-10.0.26300-SP0",
+  "python": "3.10.2",
+  "packages": {
+    "torch": "2.8.0+cpu",
+    "sentence-transformers": "5.1.2",
+    "transformers": "4.57.1",
+    "numpy": "2.2.6"
+  },
+  "dimension": 768,
+  "max_tokens": 512,
+  "max_observed_tokens": 87,
+  "normalized": true,
+  "threads": 4,
+  "document_batch_size": 4,
+  "query_batch_size": 1,
+  "repeats": 5,
+  "data_sha256": "01d5f878171cae7267fce68efeb8a54e4e28d5b56a09dd5a5418fd3cc8f7b910",
+  "query_prefix": "query: ",
+  "document_prefix": "passage: ",
+  "load_seconds_including_possible_download": 354.4818156000001,
+  "query_encoding_p50_ms": 50.94334999921557,
+  "query_encoding_p95_ms": 59.53068500130029,
+  "document_encoding_docs_per_second": 15.260917431427279,
+  "document_batch_ms_raw": [
+    656.8919999990612,
+    655.2685999995447,
+    649.358000002394,
+    663.265399998636,
+    599.9358000008215
+  ],
+  "query_ms_raw": [
+    50.420699997630436,
+    42.561900001601316,
+    48.378999999840744,
+    57.90809999962221,
+    50.186199998279335,
+    47.488600001088344,
+    51.9903999993403,
+    47.68350000085775,
+    56.844400001864415,
+    50.976800001080846,
+    53.13620000015362,
+    47.49140000058105,
+    54.44409999836353,
+    51.693000001250766,
+    60.80670000301325,
+    49.281100000371225,
+    54.870500000106404,
+    53.53980000290903,
+    58.55460000020685,
+    52.741100000275765,
+    56.92990000170539,
+    48.337599997466896,
+    47.873100000288105,
+    46.05009999795584,
+    55.1277000013215,
+    51.088500000332715,
+    51.81780000202707,
+    47.626200001104735,
+    53.45649999799207,
+    60.32930000219494,
+    50.33990000083577,
+    44.4792000016605,
+    50.948500000231434,
+    45.814000000973465,
+    60.63409999842406,
+    45.76369999995222,
+    51.63399999946705,
+    51.141700001608115,
+    50.93819999819971,
+    52.49270000058459,
+    43.32159999830765,
+    43.46520000035525,
+    50.49229999713134,
+    45.04180000003544,
+    48.69759999928647,
+    45.3265999967698,
+    50.13809999945806,
+    49.84799999874667,
+    51.287099999171915,
+    52.39930000243476
+  ],
+  "quality": {
+    "all": {
+      "n": 10,
+      "hit_at_1": 1.0,
+      "hit_at_3": 1.0,
+      "mrr": 1.0
+    },
+    "en_code": {
+      "n": 4,
+      "hit_at_1": 1.0,
+      "hit_at_3": 1.0,
+      "mrr": 1.0
+    },
+    "ko_code": {
+      "n": 4,
+      "hit_at_1": 1.0,
+      "hit_at_3": 1.0,
+      "mrr": 1.0
+    },
+    "ko_doc": {
+      "n": 2,
+      "hit_at_1": 1.0,
+      "hit_at_3": 1.0,
+      "mrr": 1.0
+    }
+  },
+  "per_query": [
+    {
+      "query_id": "ko_doc_1",
+      "group": "ko_doc",
+      "query": "저장 성공 응답을 커밋 전과 후 중 언제 반환해야 해?",
+      "expected": "doc_commit",
+      "expected_rank": 1,
+      "hit_at_1": 1,
+      "hit_at_3": 1,
+      "reciprocal_rank": 1.0,
+      "top3": [
+        {
+          "id": "doc_commit",
+          "score": 0.9082471132278442
+        },
+        {
+          "id": "doc_size",
+          "score": 0.7940678596496582
+        },
+        {
+          "id": "java_create",
+          "score": 0.7677428722381592
+        }
+      ]
+    },
+    {
+      "query_id": "ko_doc_2",
+      "group": "ko_doc",
+      "query": "한글 업로드 제한은 글자 수로 검사해도 되나?",
+      "expected": "doc_size",
+      "expected_rank": 1,
+      "hit_at_1": 1,
+      "hit_at_3": 1,
+      "reciprocal_rank": 1.0,
+      "top3": [
+        {
+          "id": "doc_size",
+          "score": 0.8924925923347473
+        },
+        {
+          "id": "doc_commit",
+          "score": 0.7623911499977112
+        },
+        {
+          "id": "python_append",
+          "score": 0.7618818879127502
+        }
+      ]
+    },
+    {
+      "query_id": "ko_java",
+      "group": "ko_code",
+      "query": "Java에서 같은 ID가 이미 있으면 예외를 내고 새 레코드를 저장하는 코드를 찾아줘.",
+      "expected": "java_create",
+      "expected_rank": 1,
+      "hit_at_1": 1,
+      "hit_at_3": 1,
+      "reciprocal_rank": 1.0,
+      "top3": [
+        {
+          "id": "java_create",
+          "score": 0.8475180268287659
+        },
+        {
+          "id": "java_delete",
+          "score": 0.8175280094146729
+        },
+        {
+          "id": "python_atomic",
+          "score": 0.7968647480010986
+        }
+      ]
+    },
+    {
+      "query_id": "en_java",
+      "group": "en_code",
+      "query": "Find Java code that rejects an existing ID with an exception before saving a new record.",
+      "expected": "java_create",
+      "expected_rank": 1,
+      "hit_at_1": 1,
+      "hit_at_3": 1,
+      "reciprocal_rank": 1.0,
+      "top3": [
+        {
+          "id": "java_create",
+          "score": 0.852240800857544
+        },
+        {
+          "id": "java_delete",
+          "score": 0.8319172859191895
+        },
+        {
+          "id": "ts_save",
+          "score": 0.788676381111145
+        }
+      ]
+    },
+    {
+      "query_id": "ko_atomic",
+      "group": "ko_code",
+      "query": "Python에서 임시 파일에 쓴 다음 기존 파일을 원자적으로 교체하는 코드를 찾아줘.",
+      "expected": "python_atomic",
+      "expected_rank": 1,
+      "hit_at_1": 1,
+      "hit_at_3": 1,
+      "reciprocal_rank": 1.0,
+      "top3": [
+        {
+          "id": "python_atomic",
+          "score": 0.8450629711151123
+        },
+        {
+          "id": "python_append",
+          "score": 0.7891415953636169
+        },
+        {
+          "id": "doc_size",
+          "score": 0.7781933546066284
+        }
+      ]
+    },
+    {
+      "query_id": "en_atomic",
+      "group": "en_code",
+      "query": "Find Python code that writes to a temporary file and then atomically replaces the destination file.",
+      "expected": "python_atomic",
+      "expected_rank": 1,
+      "hit_at_1": 1,
+      "hit_at_3": 1,
+      "reciprocal_rank": 1.0,
+      "top3": [
+        {
+          "id": "python_atomic",
+          "score": 0.8807393312454224
+        },
+        {
+          "id": "python_append",
+          "score": 0.806652843952179
+        },
+        {
+          "id": "java_delete",
+          "score": 0.7769749164581299
+        }
+      ]
+    },
+    {
+      "query_id": "ko_ts",
+      "group": "ko_code",
+      "query": "TypeScript에서 객체를 JSON 문자열로 바꿔 브라우저 저장소에 넣는 코드를 찾아줘.",
+      "expected": "ts_save",
+      "expected_rank": 1,
+      "hit_at_1": 1,
+      "hit_at_3": 1,
+      "reciprocal_rank": 1.0,
+      "top3": [
+        {
+          "id": "ts_save",
+          "score": 0.8383710384368896
+        },
+        {
+          "id": "ts_load",
+          "score": 0.825218677520752
+        },
+        {
+          "id": "doc_size",
+          "score": 0.7940006852149963
+        }
+      ]
+    },
+    {
+      "query_id": "en_ts",
+      "group": "en_code",
+      "query": "Find TypeScript code that serializes an object as JSON and saves it in browser storage.",
+      "expected": "ts_save",
+      "expected_rank": 1,
+      "hit_at_1": 1,
+      "hit_at_3": 1,
+      "reciprocal_rank": 1.0,
+      "top3": [
+        {
+          "id": "ts_save",
+          "score": 0.8752354979515076
+        },
+        {
+          "id": "ts_load",
+          "score": 0.851118803024292
+        },
+        {
+          "id": "java_create",
+          "score": 0.7928184270858765
+        }
+      ]
+    },
+    {
+      "query_id": "ko_mean",
+      "group": "ko_code",
+      "query": "Python에서 리스트의 산술 평균을 구하고 빈 리스트면 0을 반환하는 코드를 찾아줘.",
+      "expected": "python_mean",
+      "expected_rank": 1,
+      "hit_at_1": 1,
+      "hit_at_3": 1,
+      "reciprocal_rank": 1.0,
+      "top3": [
+        {
+          "id": "python_mean",
+          "score": 0.8369329571723938
+        },
+        {
+          "id": "python_median",
+          "score": 0.8225213289260864
+        },
+        {
+          "id": "python_atomic",
+          "score": 0.7969812154769897
+        }
+      ]
+    },
+    {
+      "query_id": "en_mean",
+      "group": "en_code",
+      "query": "Find Python code that computes the arithmetic mean of a list and returns zero for an empty list.",
+      "expected": "python_mean",
+      "expected_rank": 1,
+      "hit_at_1": 1,
+      "hit_at_3": 1,
+      "reciprocal_rank": 1.0,
+      "top3": [
+        {
+          "id": "python_mean",
+          "score": 0.8400343656539917
+        },
+        {
+          "id": "python_median",
+          "score": 0.810417652130127
+        },
+        {
+          "id": "python_atomic",
+          "score": 0.779059112071991
+        }
+      ]
+    }
+  ]
+}
