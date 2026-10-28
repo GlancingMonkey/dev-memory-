@@ -8,4 +8,16 @@ dependencies = [
     "psycopg[binary]>=3.3.5",
     "python-dotenv>=1.2.3",
     "sqlalchemy>=2.0.54",
+    "torch==2.8.0",
+    "sentence-transformers==5.1.2",
+    "transformers==4.57.1",
+    "numpy==2.2.6",
 ]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
