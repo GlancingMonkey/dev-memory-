@@ -1,12 +1,20 @@
 {
   "name": "code-memory",
-  "displayName": "code-memory",
-  "description": "",
+  "displayName": "Code Memory",
+  "description": "VS Code에서 선택한 코드를 저장하고, 자연어로 다시 찾아 쓰는 확장 (dev-memory 캡스톤)",
+  "publisher": "dev-memory-team",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GlancingMonkey/dev-memory-.git",
+    "directory": "extension"
+  },
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.138.0"
   },
   "categories": [
+    "Snippets",
     "Other"
   ],
   "activationEvents": [],
@@ -15,7 +23,7 @@
     "commands": [
       {
         "command": "codeMemory.saveSnippet",
-        "title": "Code Memory: 선택한 코드 저장"
+        "title": "Code Memory: 코드 저장 (선택 또는 커서가 있는 함수)"
       },
       {
         "command": "codeMemory.focusSearch",
@@ -28,13 +36,17 @@
       {
         "command": "codeMemory.findSimilar",
         "title": "Code Memory: 비슷한 코드 찾기"
+      },
+      {
+        "command": "codeMemory.openWalkthrough",
+        "title": "Code Memory: 시작하기 안내"
       }
     ],
     "menus": {
       "editor/context": [
         {
           "command": "codeMemory.saveSnippet",
-          "when": "editorHasSelection",
+          "when": "editorTextFocus",
           "group": "navigation@1"
         },
         {
@@ -48,7 +60,7 @@
       {
         "command": "codeMemory.saveSnippet",
         "key": "ctrl+alt+s",
-        "when": "editorHasSelection"
+        "when": "editorTextFocus"
       },
       {
         "command": "codeMemory.focusSearch",
@@ -97,9 +109,76 @@
           "type": "boolean",
           "default": false,
           "description": "저장하기 전에 자동으로 찾은 함수 이름을 확인·수정하는 입력창 띄우기"
+        },
+        "codeMemory.saveTimeoutSeconds": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 300,
+          "description": "저장 요청 제한 시간(초). 팀이 실제 저장 시간을 측정해서 정한다. 출력 패널과 저장 기록에 걸린 시간이 남는다"
+        },
+        "codeMemory.searchTimeoutSeconds": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 300,
+          "description": "검색 요청 제한 시간(초)"
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "start",
+        "title": "Code Memory 시작하기",
+        "description": "코드를 저장하고, 말로 찾아서 다시 쓰는 방법",
+        "steps": [
+          {
+            "id": "mode",
+            "title": "1. 지금 모드 확인하기",
+            "description": "맨 아래 상태 표시줄의 **Code Memory** 칸에서 mock(가짜 서버)인지 실제 서버인지 확인해요.\n[모드 바꾸기](command:codeMemory.switchMode)",
+            "media": {
+              "markdown": "media/walkthrough/mode.md"
+            },
+            "completionEvents": [
+              "onCommand:codeMemory.switchMode"
+            ]
+          },
+          {
+            "id": "save",
+            "title": "2. 코드 저장하기",
+            "description": "코드를 선택하거나 함수 안에 커서를 두고 **Ctrl+Alt+S**. 우클릭 메뉴에도 있어요.\n[지금 저장해 보기](command:codeMemory.saveSnippet)",
+            "media": {
+              "markdown": "media/walkthrough/save.md"
+            },
+            "completionEvents": [
+              "onCommand:codeMemory.saveSnippet"
+            ]
+          },
+          {
+            "id": "search",
+            "title": "3. 말로 검색하기",
+            "description": "왼쪽 Code Memory 아이콘이나 **Ctrl+Alt+F**로 검색창을 열고, 찾고 싶은 코드를 말로 설명해요.\n[검색창 열기](command:codeMemory.focusSearch)",
+            "media": {
+              "markdown": "media/walkthrough/search.md"
+            },
+            "completionEvents": [
+              "onCommand:codeMemory.focusSearch"
+            ]
+          },
+          {
+            "id": "use",
+            "title": "4. 찾은 코드 쓰기",
+            "description": "결과 카드에서 원본 열기 · 삽입 · 복사 · 비교. 코드를 선택하고 우클릭 → **비슷한 코드 찾기**도 돼요.",
+            "media": {
+              "markdown": "media/walkthrough/use.md"
+            },
+            "completionEvents": [
+              "onView:codeMemory.searchView"
+            ]
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
@@ -113,7 +192,9 @@
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js",
+    "vsix": "npx --yes @vscode/vsce@3 package --no-dependencies --skip-license"
   },
   "devDependencies": {
     "@types/vscode": "^1.138.0",

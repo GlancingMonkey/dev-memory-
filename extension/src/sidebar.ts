@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { clamp, EmbeddingStatus, reindent } from './logic';
 
 // ─────────────────────────────────────────────
 // 검색 결과 한 건 — 저장 때 보낸 스니펫 + 서버가 붙여주는 id, score
@@ -82,14 +83,15 @@ async function searchSnippets(query: string): Promise<SearchResult[]> {
   const baseUrl = config.get<string>('apiUrl', 'http://localhost:8000').replace(/\/+$/, '');
   const limit = Math.min(20, Math.max(1, Math.round(config.get<number>('searchLimit', 10))));
   const url = `${baseUrl}/search?q=${encodeURIComponent(query)}&limit=${limit}`;
+  const timeoutSec = clamp(config.get<number>('searchTimeoutSeconds'), 1, 300, 10);
 
   let res: Response;
   try {
-    res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    res = await fetch(url, { signal: AbortSignal.timeout(timeoutSec * 1000) });
   } catch (err) {
     // 시간 초과: 첫 검색은 모델 준비로 오래 걸릴 수 있다 → "고장"이 아니라 대기 안내
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-      throw new SearchError('응답 시간 초과 (10초)', '첫 검색은 모델 준비로 오래 걸릴 수 있어요. 잠시 후 다시 검색하세요.', 'timeout');
+      throw new SearchError(`응답 시간 초과 (${timeoutSec}초)`, '첫 검색은 모델 준비로 오래 걸릴 수 있어요. 잠시 후 다시 검색하세요.', 'timeout');
     }
     // 서버 꺼짐 / 주소 틀림
     const reason = err instanceof Error ? err.message : String(err);
@@ -163,9 +165,39 @@ async function insertCode(code: string): Promise<void> {
     vscode.window.showWarningMessage('코드를 넣을 편집기를 먼저 여세요.');
     return;
   }
+  // 커서 위치 들여쓰기에 맞춘다:
+  //   커서 앞이 공백뿐이면(빈 줄·들여쓴 자리) 그 공백을, 아니면 그 줄의 들여쓰기를 둘째 줄부터 붙인다
+  const pos = editor.selection.start;
+  const lineText = editor.document.lineAt(pos.line).text;
+  const before = lineText.slice(0, pos.character);
+  const prefix = before.trim().length === 0 ? before : (/^\s*/.exec(lineText)?.[0] ?? '');
+  const eol = editor.document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
+  const text = reindent(code, prefix, eol);
   // insertSnippet 대신 edit 을 쓰는 이유: 코드에 $ 가 있으면 스니펫 문법으로 해석돼서 깨짐
-  await editor.edit((builder) => builder.replace(editor.selection, code));
+  await editor.edit((builder) => builder.replace(editor.selection, text));
 }
+
+// ─────────────────────────────────────────────
+// 비교 화면 — 내 코드 ↔ 저장된 코드를 VS Code 비교(diff) 화면으로
+//   읽기 전용 가상 문서로 띄워서, 닫을 때 "저장할까요?"가 안 뜨게 한다
+// ─────────────────────────────────────────────
+export const COMPARE_SCHEME = 'code-memory-compare';
+
+class CompareDocs implements vscode.TextDocumentContentProvider {
+  private readonly docs = new Map<string, string>();
+  private seq = 0;
+
+  put(name: string, content: string): vscode.Uri {
+    const uri = vscode.Uri.from({ scheme: COMPARE_SCHEME, path: '/' + name, query: String(++this.seq) });
+    this.docs.set(uri.toString(), content);
+    return uri;
+  }
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.docs.get(uri.toString()) ?? '';
+  }
+}
+export const compareDocs = new CompareDocs();
 
 type FromWebview =
   | { type: 'search'; query: string }
@@ -178,7 +210,9 @@ type FromWebview =
   | { type: 'clearHistory' }
   | { type: 'copyText'; text: string }
   | { type: 'prefs'; prefs: UiPrefs }
-  | { type: 'switchMode' };
+  | { type: 'switchMode' }
+  | { type: 'compare'; result: SearchResult }
+  | { type: 'walkthrough' };
 
 // 저장 시도 한 건 — extension.ts 가 저장할 때마다 넘겨준다
 export interface SaveRecord {
@@ -190,6 +224,8 @@ export interface SaveRecord {
   start_line: number;
   end_line: number;
   error?: string;
+  elapsedMs?: number;              // 요청~응답 걸린 시간
+  embedding?: EmbeddingStatus;     // 서버가 알려준 검색 준비 상태
 }
 const HISTORY_KEY = 'codeMemory.saveHistory';
 const HISTORY_MAX = 20;
@@ -256,6 +292,32 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
     this.pendingFocus = true;
     await vscode.commands.executeCommand(`${SearchViewProvider.viewId}.focus`);
     this.flush();
+  }
+
+  // "비슷한 코드 찾기"에 쓴 원래 코드 — 결과 카드의 "비교"에서 선택이 없을 때 왼쪽에 쓴다
+  private compareSource: { code: string; languageId: string } | undefined;
+  public setCompareSource(code: string, languageId: string): void {
+    this.compareSource = { code, languageId };
+  }
+
+  // 결과 카드 "비교": 왼쪽 = 지금 선택한 코드(없으면 비슷한 코드 찾기에 쓴 코드), 오른쪽 = 저장된 코드
+  private async compare(r: SearchResult): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    let left: { code: string; label: string } | undefined;
+    if (editor && !editor.selection.isEmpty) {
+      left = { code: editor.document.getText(editor.selection), label: '선택한 코드' };
+    } else if (this.compareSource) {
+      left = { code: this.compareSource.code, label: '비슷한 코드 찾기에 쓴 코드' };
+    }
+    if (!left) {
+      vscode.window.showWarningMessage('비교할 코드를 에디터에서 먼저 선택하세요.');
+      return;
+    }
+    const name = r.function_name ?? r.file_path.split('/').pop() ?? 'snippet';
+    const ext = r.file_path.includes('.') ? r.file_path.slice(r.file_path.lastIndexOf('.')) : '';   // 확장자로 문법 색
+    const leftUri = compareDocs.put(`${left.label}${ext}`, left.code);
+    const rightUri = compareDocs.put(`${name} (id ${r.id})${ext}`, r.code);
+    await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, `${left.label} ↔ ${name} (id ${r.id})`);
   }
 
   // 저장 시도 한 건을 기록 (패널 아래 "저장 기록" + 패널 안 알림)
@@ -381,6 +443,14 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
         }
         case 'switchMode': {
           await vscode.commands.executeCommand('codeMemory.switchMode');
+          break;
+        }
+        case 'compare': {
+          await this.compare(msg.result);
+          break;
+        }
+        case 'walkthrough': {
+          await vscode.commands.executeCommand('codeMemory.openWalkthrough');
           break;
         }
       }
@@ -515,6 +585,12 @@ function getHtml(webview: vscode.Webview): string {
   .t { padding-right: 8px; overflow: hidden; text-overflow: ellipsis; }
   .kw { color: var(--vscode-debugTokenExpression-boolean, #569cd6); }
   .fn { color: var(--vscode-symbolIcon-functionForeground, #dcdcaa); }
+  .type { color: var(--vscode-symbolIcon-classForeground, #4ec9b0); }
+  .str { color: var(--vscode-debugTokenExpression-string, #ce9178); }
+  .num { color: var(--vscode-debugTokenExpression-number, #b5cea8); }
+  .com { color: var(--vscode-descriptionForeground); font-style: italic; }
+  .const { color: var(--vscode-debugTokenExpression-boolean, #569cd6); }
+  .deco { color: var(--vscode-debugTokenExpression-name, #c586c0); }
   .more { margin: 2px 0 0 28px; padding: 0; border: 0; background: none; font-size: 11px; color: var(--vscode-textLink-foreground); }
 
   /* D. 버튼은 평소 흐리게, 마우스·키보드로 고른 카드만 진하게 */
@@ -628,6 +704,7 @@ function getHtml(webview: vscode.Webview): string {
         <button type="button" class="chip">리스트에서 짝수만 고르기</button>
         <button type="button" class="chip">나이순으로 정렬</button>
       </div>
+      <button id="walk" class="link-btn" type="button">처음이면 시작하기 안내 보기</button>
     </div>
     <div id="list"></div>
   </div>
@@ -650,13 +727,14 @@ function getHtml(webview: vscode.Webview): string {
   const histHead = byId('histHead'), histBody = byId('histBody'), toast = byId('toast');
 
   const MAX_LINES = 6;   // 이보다 긴 코드는 접어서 보여준다
-  // 아주 단순한 강조: 자주 쓰는 키워드와 def/function/class 바로 뒤 이름만 색칠
+  // 문법 색에 쓰는 키워드 (언어 공통으로 대충 모은 것)
   const KEYWORDS = new Set(['def', 'class', 'return', 'if', 'elif', 'else', 'for', 'while', 'in', 'is', 'not', 'and', 'or',
     'import', 'from', 'as', 'with', 'try', 'except', 'finally', 'raise', 'lambda', 'yield', 'pass', 'break', 'continue',
-    'function', 'const', 'let', 'var', 'new', 'async', 'await', 'catch', 'throw', 'switch', 'case', 'export', 'extends',
-    'public', 'private', 'protected', 'static', 'final', 'void', 'interface', 'None', 'True', 'False', 'null', 'true', 'false',
-    'undefined', 'this', 'self']);
-  const DECL = new Set(['def', 'class', 'function']);
+    'global', 'nonlocal', 'assert', 'del', 'function', 'const', 'let', 'var', 'new', 'async', 'await', 'catch', 'throw',
+    'throws', 'switch', 'case', 'default', 'export', 'extends', 'implements', 'public', 'private', 'protected', 'static',
+    'final', 'abstract', 'override', 'void', 'interface', 'enum', 'struct', 'trait', 'type', 'typeof', 'instanceof', 'delete',
+    'of', 'do', 'package', 'fn', 'fun', 'func', 'val', 'impl', 'pub', 'use', 'mod', 'match', 'where', 'defer', 'go', 'chan',
+    'using', 'namespace', 'template', 'typename', 'sizeof', 'goto', 'readonly', 'declare', 'module', 'require']);
   // E. 언어 색 (GitHub 언어 색 기준). 없으면 회색
   const LANG_COLORS = { python: '#3572A5', typescript: '#3178c6', typescriptreact: '#3178c6', javascript: '#f1e05a',
     javascriptreact: '#f1e05a', java: '#b07219', c: '#555555', cpp: '#f34b7d', csharp: '#178600', go: '#00ADD8', rust: '#dea584',
@@ -673,6 +751,7 @@ function getHtml(webview: vscode.Webview): string {
     alert: ['M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z', 'M12 7v6', 'M12 16.5v.5'],
     clock: ['M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z', 'M12 7v5l3 2'],
     check: ['M5 12l5 5L20 7'],
+    diff: ['M4 4h6v16H4z', 'M14 4h6v16h-6z'],
   };
 
   // ── 상태
@@ -723,6 +802,8 @@ function getHtml(webview: vscode.Webview): string {
       search(b.textContent);
     });
   });
+
+  byId('walk').addEventListener('click', function () { vscode.postMessage({ type: 'walkthrough' }); });
 
   // A. 스크롤하면 고정 영역 아래에 그림자
   window.addEventListener('scroll', function () {
@@ -1051,9 +1132,12 @@ function getHtml(webview: vscode.Webview): string {
     // 코드 — 실제 줄 번호(start_line 부터)와 함께
     const lines = String(r.code || '').replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');
     const code = el('div', 'code');
+    let hlState = null;   // 여러 줄 주석·문자열이 다음 줄로 이어질 때
     lines.forEach(function (text, k) {
+      const h = highlight(text, r.language, hlState);
+      hlState = h.state;
       const ln = el('div', 'ln');
-      ln.append(el('span', 'n', String(r.start_line + k)), highlight(text));
+      ln.append(el('span', 'n', String(r.start_line + k)), h.node);
       code.append(ln);
     });
     c.append(code);
@@ -1072,7 +1156,8 @@ function getHtml(webview: vscode.Webview): string {
     const openBtn = action('open', '원본 열기', function () { openResult(r); });
     if (!info.canOpen) { openBtn.disabled = true; openBtn.title = info.why; }
     const copyBtn = action('copy', '복사', function () { copyCode(r, copyBtn); });
-    acts.append(openBtn, action('insert', '삽입', function () { insertCode(r); }), copyBtn);
+    acts.append(openBtn, action('insert', '삽입', function () { insertCode(r); }), copyBtn,
+      action('diff', '비교', function () { compareResult(r); }));
     c.append(acts);
 
     keyboard(c, r, i, info.canOpen, function () { copyBtn.click(); });
@@ -1085,7 +1170,7 @@ function getHtml(webview: vscode.Webview): string {
     const c = el('div', 'card compact' + (r.rank === 1 ? ' top' : '') + (info.canOpen ? '' : ' off'));
     const where = el('span', info.canOpen ? 'where ok' : 'where', info.where);
     c.append(el('span', 'rank', String(r.rank)), langDot(r.language), el('span', 'name', nameOf(r)), where, simEl(r));
-    c.title = (info.canOpen ? '눌러서 원본 열기' : info.why) + ' · ↑↓ 이동 · C 복사 · I 삽입 · Esc 검색창';
+    c.title = (info.canOpen ? '눌러서 원본 열기' : info.why) + ' · ↑↓ 이동 · C 복사 · I 삽입 · D 비교 · Esc 검색창';
     c.addEventListener('click', function () { if (info.canOpen) { openResult(r); } });
     keyboard(c, r, i, info.canOpen, function () { copyCode(r, null); showToast({ status: 'copy', function_name: nameOf(r) }); });
     return c;
@@ -1094,7 +1179,7 @@ function getHtml(webview: vscode.Webview): string {
   // 키보드: ↑↓ 이동, Enter 원본 열기, C 복사, I 삽입, Esc 검색창
   function keyboard(c, r, i, canOpen, onCopy) {
     c.tabIndex = 0;
-    if (!c.title) { c.title = '↑↓ 이동 · Enter 원본 열기 · C 복사 · I 삽입 · Esc 검색창'; }
+    if (!c.title) { c.title = '↑↓ 이동 · Enter 원본 열기 · C 복사 · I 삽입 · D 비교 · Esc 검색창'; }
     c.addEventListener('keydown', function (e) {
       if (e.target !== c) { return; }   // 카드 안 버튼에 포커스가 있으면 버튼 기본 동작
       const k = e.key.toLowerCase();
@@ -1103,6 +1188,7 @@ function getHtml(webview: vscode.Webview): string {
       else if (e.key === 'Enter') { e.preventDefault(); if (canOpen) { openResult(r); } }
       else if (k === 'c') { e.preventDefault(); onCopy(); }
       else if (k === 'i') { e.preventDefault(); insertCode(r); }
+      else if (k === 'd') { e.preventDefault(); compareResult(r); }
       else if (e.key === 'Escape') { e.preventDefault(); input.focus(); }
     });
   }
@@ -1117,6 +1203,7 @@ function getHtml(webview: vscode.Webview): string {
   }
 
   function openResult(r) { vscode.postMessage({ type: 'open', result: r }); }
+  function compareResult(r) { vscode.postMessage({ type: 'compare', result: r }); }
   function insertCode(r) { vscode.postMessage({ type: 'insert', code: r.code }); }
   function copyCode(r, btn) {
     vscode.postMessage({ type: 'copy', code: r.code });
@@ -1152,14 +1239,26 @@ function getHtml(webview: vscode.Webview): string {
       const parts = [];
       if (h.id !== undefined && h.id !== null) { parts.push('id ' + h.id); }
       parts.push(timeOf(h.time));
-      parts.push(h.status === 'fail' && h.error ? h.error : h.file_path + ':' + h.start_line + '-' + h.end_line);
-      const pill = el('span', 'pill ' + h.status, h.status === 'ok' ? '저장됨' : h.status === 'mock' ? 'mock' : '실패');
+      if (typeof h.elapsedMs === 'number') { parts.push((h.elapsedMs / 1000).toFixed(1) + '초'); }
+      parts.push(h.error ? h.error : h.file_path + ':' + h.start_line + '-' + h.end_line);
+      const p = pillOf(h);
+      const pill = el('span', 'pill ' + p.cls, p.text);
       row.append(el('span', 'fnm', name), el('span', 'meta', parts.join(' · ')), pill);
       row.title = '눌러서 "' + name + '" 검색' + (h.error ? ' — ' + h.error : '');
       row.addEventListener('click', function () { input.value = name; search(name); });
       histBody.append(row);
     });
   }
+  // 저장됨 / 검색 준비됨 / 준비 중 / 검색 준비 실패 / mock / 실패
+  function pillOf(h) {
+    if (h.status === 'mock') { return { cls: 'mock', text: 'mock' }; }
+    if (h.status === 'fail') { return { cls: 'fail', text: '실패' }; }
+    if (h.embedding === 'ready') { return { cls: 'ok', text: '검색 준비됨' }; }
+    if (h.embedding === 'pending') { return { cls: 'mock', text: '준비 중' }; }
+    if (h.embedding === 'failed') { return { cls: 'fail', text: '검색 준비 실패' }; }
+    return { cls: 'ok', text: '저장됨' };
+  }
+
   histHead.addEventListener('click', function () {
     prefs.historyOpen = !prefs.historyOpen;
     vscode.postMessage({ type: 'prefs', prefs: prefs });
@@ -1169,13 +1268,17 @@ function getHtml(webview: vscode.Webview): string {
   // ── 패널 안 알림 (저장 결과 / 간단히 보기에서 복사)
   function showToast(rec) {
     const name = rec.function_name || String(rec.file_path || '').split('/').pop() || '';
-    toast.className = 'toast ' + rec.status;
+    const embFailed = rec.status === 'ok' && rec.embedding === 'failed';
+    toast.className = 'toast ' + (embFailed ? 'mock' : rec.status);
     let text;
-    if (rec.status === 'ok') { text = '저장됨 · ' + name + ' · id ' + rec.id; }
+    if (embFailed) { text = '저장됨 · 검색 준비 실패 · ' + name + ' · id ' + rec.id; }
+    else if (rec.status === 'ok') {
+      text = '저장됨 · ' + name + ' · id ' + rec.id + (rec.embedding === 'ready' ? ' · 검색 준비 완료' : rec.embedding === 'pending' ? ' · 검색 준비 중' : '');
+    }
     else if (rec.status === 'mock') { text = '[mock] 저장 흉내 · ' + name; }
     else if (rec.status === 'copy') { text = '복사됨 · ' + name; }
     else { text = '저장 실패 · ' + name; }
-    toast.replaceChildren(icon(rec.status === 'fail' ? 'alert' : 'check'), el('span', 'grow', text));
+    toast.replaceChildren(icon(rec.status === 'fail' || embFailed ? 'alert' : 'check'), el('span', 'grow', text));
     if (rec.status === 'ok' || rec.status === 'mock') {
       const go = el('button', 'link-btn', '검색에서 확인');
       go.type = 'button';
@@ -1187,25 +1290,104 @@ function getHtml(webview: vscode.Webview): string {
     toastTimer = setTimeout(function () { toast.hidden = true; }, rec.status === 'copy' ? 1500 : 5000);
   }
 
-  // 한 줄을 강조된 span 으로 — innerHTML 을 쓰지 않아서 코드 안의 태그가 실행되지 않는다
-  function highlight(text) {
-    const span = el('span', 't');
-    const re = /[A-Za-z_][A-Za-z0-9_]*/g;
-    let last = 0;
-    let afterDecl = false;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      const w = m[0];
-      let cls = '';
-      if (afterDecl) { cls = 'fn'; afterDecl = false; }
-      else if (KEYWORDS.has(w)) { cls = 'kw'; afterDecl = DECL.has(w); }
-      if (!cls) { continue; }
-      if (m.index > last) { span.append(document.createTextNode(text.slice(last, m.index))); }
-      span.append(el('span', cls, w));
-      last = m.index + w.length;
+  // ── 문법 색: 문자열·주석·숫자·키워드·함수·타입·데코레이터를 줄 단위로 칠한다.
+  //    여러 줄짜리 주석(/* */)·문자열(파이썬 따옴표 3개, 백틱)은 state 로 다음 줄에 이어진다.
+  //    innerHTML 을 쓰지 않아서 코드 안의 태그가 실행되지 않는다.
+  const BS = String.fromCharCode(92);   // 역슬래시
+  const BT = String.fromCharCode(96);   // 백틱
+  const HASH_LANGS = new Set(['python', 'shellscript', 'ruby', 'r', 'yaml', 'perl', 'powershell', 'dockerfile', 'makefile', 'toml', 'coffeescript']);
+  const SLASH_LANGS = new Set(['c', 'cpp', 'csharp', 'java', 'javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'go', 'rust',
+    'kotlin', 'swift', 'php', 'dart', 'scss', 'less', 'css', 'jsonc', 'vue', 'scala', 'groovy']);
+  const SQL_KEYWORDS = new Set(['SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE', 'JOIN', 'LEFT', 'RIGHT',
+    'INNER', 'OUTER', 'ON', 'GROUP', 'BY', 'ORDER', 'HAVING', 'AS', 'AND', 'OR', 'NOT', 'NULL', 'IS', 'IN', 'LIKE', 'LIMIT', 'CREATE',
+    'TABLE', 'INDEX', 'DROP', 'ALTER', 'ADD', 'PRIMARY', 'KEY', 'REFERENCES', 'DISTINCT', 'UNION', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+    'RETURNING', 'EXISTS', 'IF', 'DEFAULT', 'BEGIN', 'COMMIT', 'ROLLBACK', 'WITH']);
+  const FN_DECL = new Set(['def', 'function', 'fn', 'fun', 'func']);
+  const TYPE_DECL = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type']);
+  const CONSTS = new Set(['None', 'True', 'False', 'null', 'true', 'false', 'undefined', 'nil', 'NaN', 'this', 'self', 'super']);
+
+  function isIdStart(c) { return !!c && /[A-Za-z_$]/.test(c); }
+  function isIdChar(c) { return !!c && /[A-Za-z0-9_$]/.test(c); }
+
+  function tokenize(text, lang, state) {
+    const parts = [];
+    const n = text.length;
+    const hash = HASH_LANGS.has(lang), slash = SLASH_LANGS.has(lang), dash = lang === 'sql', py = lang === 'python';
+    let i = 0;
+    let plain = '';
+    let decl = '';
+    function flush() { if (plain) { parts.push(['', plain]); plain = ''; } }
+    function push(cls, s) { flush(); if (s) { parts.push([cls, s]); } }
+
+    // 앞 줄에서 이어진 주석·문자열
+    if (state) {
+      const e = text.indexOf(state.end);
+      if (e < 0) { push(state.cls, text); return { parts: parts, state: state }; }
+      push(state.cls, text.slice(0, e + state.end.length));
+      i = e + state.end.length;
+      state = null;
     }
-    if (last < text.length) { span.append(document.createTextNode(text.slice(last))); }
-    return span;
+    while (i < n) {
+      const ch = text[i];
+      const two = text.slice(i, i + 2);
+      const three = text.slice(i, i + 3);
+      if ((hash && ch === '#') || (slash && two === '//') || (dash && two === '--')) { push('com', text.slice(i)); break; }
+      if (slash && two === '/*') {
+        const e = text.indexOf('*/', i + 2);
+        if (e < 0) { push('com', text.slice(i)); state = { end: '*/', cls: 'com' }; break; }
+        push('com', text.slice(i, e + 2)); i = e + 2; continue;
+      }
+      if (py && (three === '"""' || three === "'''")) {
+        const e = text.indexOf(three, i + 3);
+        if (e < 0) { push('str', text.slice(i)); state = { end: three, cls: 'str' }; break; }
+        push('str', text.slice(i, e + 3)); i = e + 3; continue;
+      }
+      if (ch === '"' || ch === "'" || (ch === BT && slash)) {
+        let j = i + 1;
+        while (j < n && text[j] !== ch) { j += text[j] === BS ? 2 : 1; }
+        if (j >= n && ch === BT) { push('str', text.slice(i)); state = { end: BT, cls: 'str' }; break; }
+        push('str', text.slice(i, Math.min(j + 1, n))); i = j + 1; continue;
+      }
+      if (/[0-9]/.test(ch) && !isIdChar(text[i - 1])) {
+        let j = i;
+        while (j < n && /[0-9a-fA-FxXoObB._]/.test(text[j])) { j++; }
+        push('num', text.slice(i, j)); i = j; continue;
+      }
+      if (ch === '@' && isIdStart(text[i + 1])) {
+        let j = i + 1;
+        while (j < n && (isIdChar(text[j]) || text[j] === '.')) { j++; }
+        push('deco', text.slice(i, j)); i = j; continue;
+      }
+      if (isIdStart(ch)) {
+        let j = i;
+        while (j < n && isIdChar(text[j])) { j++; }
+        const w = text.slice(i, j);
+        let k = j;
+        while (k < n && text[k] === ' ') { k++; }
+        let cls = '';
+        if (decl) { cls = decl; decl = ''; }
+        else if (CONSTS.has(w)) { cls = 'const'; }
+        else if (lang === 'sql' ? SQL_KEYWORDS.has(w.toUpperCase()) : KEYWORDS.has(w)) {
+          cls = 'kw';
+          decl = FN_DECL.has(w) ? 'fn' : TYPE_DECL.has(w) ? 'type' : '';
+        }
+        else if (text[k] === '(') { cls = 'fn'; }
+        else if (w[0] >= 'A' && w[0] <= 'Z' && w !== w.toUpperCase()) { cls = 'type'; }
+        if (cls) { push(cls, w); } else { plain += w; }
+        i = j; continue;
+      }
+      plain += ch;
+      i++;
+    }
+    flush();
+    return { parts: parts, state: state };
+  }
+
+  function highlight(text, lang, state) {
+    const res = tokenize(text, lang, state);
+    const span = el('span', 't');
+    res.parts.forEach(function (p) { span.append(p[0] ? el('span', p[0], p[1]) : document.createTextNode(p[1])); });
+    return { node: span, state: res.state };
   }
 
   function icon(name) {

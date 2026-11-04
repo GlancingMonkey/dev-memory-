@@ -1,5 +1,8 @@
 import * as vscode from 'vscode';
-import { SaveRecord, SearchViewProvider } from './sidebar';
+import { COMPARE_SCHEME, compareDocs, SaveRecord, SearchViewProvider } from './sidebar';
+import {
+  adjustEndLine, clamp, EmbeddingStatus, findFunctionNameByRegex, formatSeconds, parseSaveResponse, pickSymbol, SimpleSymbol,
+} from './logic';
 // ─────────────────────────────────────────────
 // 1. 스니펫의 모양
 //    Snippet   = 백엔드로 "보내는" 객체. 계약의 7개 필드만 들어간다.
@@ -24,59 +27,56 @@ interface Collected {
 const output = vscode.window.createOutputChannel('Code Memory');
 
 // ─────────────────────────────────────────────
-// 2. 함수 이름 찾기
-//    선택한 줄에서 위로 올라가며 가장 가까운 함수/클래스 선언을 찾는다.
-//    정규식 기반이라 완벽하지 않다. 못 찾으면 null.
+// 2. 함수 찾기
+//    1순위: VS Code 가 알고 있는 코드 구조(개요 창에 나오는 기호). 언어 확장이 있으면 거의 정확하다.
+//    2순위: 기호를 못 받으면(언어 확장 없음 등) 예전 정규식 방식 (logic.ts)
 // ─────────────────────────────────────────────
-const DECL_PATTERNS: Record<string, RegExp[]> = {
-  typescript: [
-    /\bfunction\s+(\w+)/,
-    /\b(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>/,
-    /^\s*(?:(?:public|private|protected|static|async)\s+)*(\w+)\s*\([^)]*\)\s*(?::\s*[^={]+)?\{/,
-    /\bclass\s+(\w+)/,
-  ],
-  javascript: [
-    /\bfunction\s+(\w+)/,
-    /\b(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>/,
-    /^\s*(?:(?:static|async)\s+)*(\w+)\s*\([^)]*\)\s*\{/,
-    /\bclass\s+(\w+)/,
-  ],
-  python: [
-    /^\s*(?:async\s+)?def\s+(\w+)/,
-    /^\s*class\s+(\w+)/,
-  ],
-  java: [
-    /^\s*(?!return\b|new\b|else\b|throw\b)(?:(?:public|private|protected|static|final|abstract|synchronized)\s+)*[\w<>\[\]]+\s+(\w+)\s*\(/,
-    /\bclass\s+(\w+)/,
-  ],
-};
-
-// if (...) { 같은 걸 함수로 착각하지 않게 걸러낸다
-const KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'new', 'else']);
-
-function findFunctionName(doc: vscode.TextDocument, fromLine: number): string | null {
-  const patterns = DECL_PATTERNS[doc.languageId];
-  if (!patterns) {
-    return null;   // 지원 안 하는 언어
+function kindOf(kind: vscode.SymbolKind): SimpleSymbol['kind'] {
+  switch (kind) {
+    case vscode.SymbolKind.Function:
+    case vscode.SymbolKind.Method:
+    case vscode.SymbolKind.Constructor:
+      return 'function';
+    case vscode.SymbolKind.Class:
+    case vscode.SymbolKind.Interface:
+    case vscode.SymbolKind.Struct:
+      return 'class';
+    default:
+      return 'other';
   }
+}
 
-  for (let i = fromLine; i >= 0 && i > fromLine - 80; i--) {
-    const text = doc.lineAt(i).text;
-    for (const re of patterns) {
-      const m = text.match(re);
-      if (m?.[1] && !KEYWORDS.has(m[1])) {
-        return m[1];
-      }
-    }
+function toSimpleSymbol(s: vscode.DocumentSymbol | vscode.SymbolInformation): SimpleSymbol {
+  if ('children' in s) {
+    return {
+      name: s.name, kind: kindOf(s.kind),
+      startLine: s.range.start.line, endLine: s.range.end.line,
+      children: s.children.map(toSimpleSymbol),
+    };
   }
-  return null;
+  return {
+    name: s.name, kind: kindOf(s.kind),
+    startLine: s.location.range.start.line, endLine: s.location.range.end.line,
+    children: [],
+  };
+}
+
+async function getSymbols(doc: vscode.TextDocument): Promise<SimpleSymbol[]> {
+  try {
+    const result = await vscode.commands.executeCommand<(vscode.DocumentSymbol | vscode.SymbolInformation)[] | undefined>(
+      'vscode.executeDocumentSymbolProvider', doc.uri,
+    );
+    return (result ?? []).map(toSimpleSymbol);
+  } catch {
+    return [];
+  }
 }
 
 // ─────────────────────────────────────────────
-// 3. 정보 수집 — 선택한 코드 + 그 코드가 어디서 왔는지
+// 3. 정보 수집 — 선택한 코드(없으면 커서가 있는 함수 전체) + 그 코드가 어디서 왔는지
 //    저장하면 안 되는 경우(새 파일, 폴더 밖 파일, 빈 선택)는 여기서 막는다.
 // ─────────────────────────────────────────────
-function collectSnippet(): Collected | null {
+async function collectSnippet(): Promise<Collected | null> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
     vscode.window.showWarningMessage('열려 있는 편집기가 없습니다.');
@@ -84,7 +84,6 @@ function collectSnippet(): Collected | null {
   }
 
   const doc = editor.document;
-  const sel = editor.selection;
 
   // 아직 디스크에 저장 안 된 새 파일(Untitled) → 경로가 없으니 차단
   if (doc.isUntitled) {
@@ -99,9 +98,25 @@ function collectSnippet(): Collected | null {
     return null;
   }
 
+  const symbols = await getSymbols(doc);
+  let sel: vscode.Selection = editor.selection;
+
+  // 선택이 없으면 커서가 있는 함수 전체를 저장 대상으로 잡는다
   if (sel.isEmpty) {
-    vscode.window.showWarningMessage('저장할 코드를 먼저 선택하세요.');
-    return null;
+    const { fn } = pickSymbol(symbols, sel.active.line);
+    if (!fn) {
+      vscode.window.showWarningMessage(
+        symbols.length
+          ? '커서가 함수 안에 있지 않습니다. 저장할 코드를 선택하거나 함수 안에 커서를 두세요.'
+          : '저장할 코드를 먼저 선택하세요. (이 파일은 함수 자동 인식을 지원하지 않습니다)',
+      );
+      return null;
+    }
+    const endLine = Math.min(fn.endLine, doc.lineCount - 1);
+    sel = new vscode.Selection(fn.startLine, 0, endLine, doc.lineAt(endLine).text.length);
+    // 무엇을 저장했는지 보이게 에디터에서도 그 범위를 선택해 준다
+    editor.selection = sel;
+    editor.revealRange(sel, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
   }
 
   const code = doc.getText(sel);
@@ -110,19 +125,20 @@ function collectSnippet(): Collected | null {
     return null;
   }
 
-  // 여러 줄을 끌어서 선택하면 커서가 "다음 줄 맨 앞"에서 끝나는 경우가 많다.
-  // 그대로 두면 end_line 이 실제보다 한 줄 커지므로 보정.
-  let endLine = sel.end.line;
-  if (sel.end.character === 0 && sel.end.line > sel.start.line) {
-    endLine -= 1;
-  }
+  // 함수 이름: 코드 구조가 있으면 그걸 믿고(함수 → 없으면 클래스), 없으면 정규식
+  const picked = pickSymbol(symbols, sel.start.line);
+  const functionName = symbols.length
+    ? (picked.fn?.name ?? picked.cls?.name ?? null)
+    : findFunctionNameByRegex((i) => doc.lineAt(i).text, doc.languageId, sel.start.line);
+
+  const endLine = adjustEndLine(sel.start.line, sel.end.line, sel.end.character);
 
   return {
     snippet: {
       project_name: folder.name,
       file_path: vscode.workspace.asRelativePath(doc.uri, false).replace(/\\/g, '/'),
       language: doc.languageId,
-      function_name: findFunctionName(doc, sel.start.line),
+      function_name: functionName,
       start_line: sel.start.line + 1,   // VS Code 는 0부터 센다 → 사람 기준 1부터로
       end_line: endLine + 1,
       code,
@@ -134,26 +150,29 @@ function collectSnippet(): Collected | null {
 // ─────────────────────────────────────────────
 // 4. 백엔드 전송 — POST /snippets
 //    mock 설정이 켜져 있으면 서버를 아예 호출하지 않는다 (가짜 응답).
+//    제한 시간은 설정 codeMemory.saveTimeoutSeconds (팀이 실제 측정 후 정함). 걸린 시간을 출력에 남긴다.
 // ─────────────────────────────────────────────
-// 저장 요청 제한 시간. 첫 저장은 모델 준비로 오래 걸릴 수 있어 팀 합의(3쪽) 후 조정한다.
-const SAVE_TIMEOUT_MS = 10000;
-
 interface SaveResult {
   id: number;
-  mock: boolean;      // true 면 실제 저장이 아니다
-  detail: string;     // 출력 패널에 남길 근거 (주소, HTTP 상태, 응답 원문)
+  mock: boolean;                 // true 면 실제 저장이 아니다
+  detail: string;                // 출력 패널에 남길 근거 (주소, HTTP 상태, 응답 원문)
+  elapsedMs: number;             // 요청~응답까지 걸린 시간
+  embedding?: EmbeddingStatus;   // 서버가 알려준 검색 준비 상태 (pending / ready / failed)
+  embeddingError?: string;
 }
 
 async function postSnippet(snippet: Snippet): Promise<SaveResult> {
   const config = vscode.workspace.getConfiguration('codeMemory');
+  const started = Date.now();
 
   if (config.get<boolean>('mock', true)) {
     await new Promise((resolve) => setTimeout(resolve, 200));   // 네트워크 흉내
-    return { id: Date.now(), mock: true, detail: 'mock=true — 서버 호출 안 함' };
+    return { id: Date.now(), mock: true, detail: 'mock=true — 서버 호출 안 함', elapsedMs: Date.now() - started };
   }
 
   const baseUrl = config.get<string>('apiUrl', 'http://localhost:8000').replace(/\/+$/, '');
   const url = `${baseUrl}/snippets`;
+  const timeoutSec = clamp(config.get<number>('saveTimeoutSeconds'), 1, 300, 10);
 
   // 계약의 7개 필드만 골라서 보낸다 (객체를 통째로 넘기지 않는다)
   const body = {
@@ -172,13 +191,13 @@ async function postSnippet(snippet: Snippet): Promise<SaveResult> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(SAVE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutSec * 1000),
     });
   } catch (err) {
     // 시간 초과: 서버는 이미 저장했을 수 있다 → 다시 보내지 말고 확인부터 하게 안내
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
       throw new Error(
-        `응답 시간 초과 (${SAVE_TIMEOUT_MS / 1000}초). 서버에는 저장됐을 수 있으니 다시 누르지 말고 서버 로그·DB 를 먼저 확인하세요.`
+        `응답 시간 초과 (${timeoutSec}초). 서버에는 저장됐을 수 있으니 다시 누르지 말고 서버 로그·DB 를 먼저 확인하세요.`
       );
     }
     // 서버가 꺼져 있음 / 주소 틀림
@@ -187,22 +206,21 @@ async function postSnippet(snippet: Snippet): Promise<SaveResult> {
   }
 
   const text = await res.text();
+  const elapsedMs = Date.now() - started;
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${text}`);
+    throw new Error(`HTTP ${res.status} (${formatSeconds(elapsedMs)}): ${text}`);
   }
 
-  // 성공 응답인데 id 가 없으면 성공으로 치지 않는다
-  let id: unknown;
-  try {
-    id = (JSON.parse(text) as { id?: unknown }).id;
-  } catch {
-    id = undefined;
-  }
-  if (typeof id !== 'number') {
-    throw new Error(`응답에 id 가 없습니다: HTTP ${res.status} ${text}`);
-  }
-
-  return { id, mock: false, detail: `POST ${url} → HTTP ${res.status} ${text}` };
+  // 성공 응답인데 id 가 없으면 성공으로 치지 않는다 (logic.ts)
+  const parsed = parseSaveResponse(text);
+  return {
+    id: parsed.id,
+    mock: false,
+    detail: `POST ${url} → HTTP ${res.status} ${text} (${formatSeconds(elapsedMs)})`,
+    elapsedMs,
+    embedding: parsed.embedding,
+    embeddingError: parsed.embeddingError,
+  };
 }
 
 // ─────────────────────────────────────────────
@@ -220,15 +238,15 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    const collected = collectSnippet();
-    if (!collected) {
-      return;
-    }
-    const { snippet, absolutePath } = collected;
-
     saving = true;
     try {
-      // 설정이 켜져 있으면 저장 전에 함수 이름 확인 (정규식 자동 추출이 틀릴 수 있다)
+      const collected = await collectSnippet();
+      if (!collected) {
+        return;
+      }
+      const { snippet, absolutePath } = collected;
+
+      // 설정이 켜져 있으면 저장 전에 함수 이름 확인 (자동 추출이 틀릴 수 있다)
       if (vscode.workspace.getConfiguration('codeMemory').get<boolean>('confirmFunctionName', false)) {
         const name = await vscode.window.showInputBox({
           title: 'Code Memory: 함수 이름 확인',
@@ -249,9 +267,9 @@ export function activate(context: vscode.ExtensionContext) {
       const where = snippet.function_name ?? snippet.file_path;
       // "검색에서 확인" 버튼: 함수 이름(없으면 파일 이름)으로 바로 검색
       const query = snippet.function_name ?? snippet.file_path.split('/').pop() ?? snippet.file_path;
-      const offerSearch = (text: string) => {
+      const offer = (show: typeof vscode.window.showInformationMessage, text: string) => {
         // await 하지 않는다 — 알림이 떠 있는 동안 다음 저장이 막히지 않게
-        void vscode.window.showInformationMessage(text, '검색에서 확인').then((choice) => {
+        void show(text, '검색에서 확인').then((choice) => {
           if (choice) {
             void searchProvider.searchFor(query);
           }
@@ -275,12 +293,25 @@ export function activate(context: vscode.ExtensionContext) {
 
         if (saved.mock) {
           output.appendLine(`→ [mock] 실제 저장 아님 (가짜 id=${saved.id})\n`);
-          offerSearch(`[mock] 저장 흉내만 냈습니다 — ${where}`);
-          await searchProvider.addSaveRecord({ ...base, status: 'mock' });
+          offer(vscode.window.showInformationMessage, `[mock] 저장 흉내만 냈습니다 — ${where}`);
+          await searchProvider.addSaveRecord({ ...base, status: 'mock', elapsedMs: saved.elapsedMs });
         } else {
-          output.appendLine(`→ 저장 완료 id=${saved.id}\n`);
-          offerSearch(`저장했습니다 (id ${saved.id}) — ${where}`);
-          await searchProvider.addSaveRecord({ ...base, status: 'ok', id: saved.id });
+          // 팀 합의: 원문 저장은 성공했어도 검색 준비(임베딩)는 실패할 수 있다 → 따로 안내
+          const ready = saved.embedding === 'ready' ? ' · 검색 준비 완료'
+            : saved.embedding === 'pending' ? ' · 검색 준비 중'
+            : '';
+          output.appendLine(`→ 저장 완료 id=${saved.id}${saved.embedding ? ` (검색 준비: ${saved.embedding})` : ''}\n`);
+          if (saved.embedding === 'failed') {
+            const why = saved.embeddingError ? ` — ${saved.embeddingError}` : '';
+            offer(vscode.window.showWarningMessage,
+              `저장은 됐지만 검색 준비에 실패했습니다 (id ${saved.id})${why}. 원문은 남아 있고, 재처리 후 검색됩니다.`);
+          } else {
+            offer(vscode.window.showInformationMessage, `저장했습니다 (id ${saved.id}) — ${where}${ready}`);
+          }
+          await searchProvider.addSaveRecord({
+            ...base, status: 'ok', id: saved.id, elapsedMs: saved.elapsedMs,
+            embedding: saved.embedding, error: saved.embeddingError?.slice(0, 120),
+          });
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -294,6 +325,9 @@ export function activate(context: vscode.ExtensionContext) {
       saving = false;
     }
   });
+
+  // 비교 화면(vscode.diff)에 띄울 읽기 전용 문서
+  context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(COMPARE_SCHEME, compareDocs));
 
   // 사이드바 검색 패널 등록
   // retainContextWhenHidden: 다른 사이드바 탭 갔다 와도 검색 결과가 안 날아가게
@@ -432,8 +466,16 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showWarningMessage('공백만 선택되었습니다.');
       return;
     }
+    // 결과 카드의 "비교"에서 왼쪽에 보여줄 원래 코드 (줄바꿈 그대로)
+    searchProvider.setCompareSource(editor.document.getText(editor.selection), editor.document.languageId);
     await searchProvider.searchFor(query);
   });
+
+  // 시작하기 안내 (VS Code 시작 화면의 단계별 안내)
+  const walkthrough = vscode.commands.registerCommand('codeMemory.openWalkthrough', () =>
+    vscode.commands.executeCommand('workbench.action.openWalkthrough', `${context.extension.id}#start`, false),
+  );
+  context.subscriptions.push(walkthrough);
   context.subscriptions.push(switchMode, findSimilar);
 
   // 단축키(Ctrl+Alt+F) → 검색창에 커서
