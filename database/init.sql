@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS snippets (
     code TEXT NOT NULL,
     embedding vector(768),
     embedding_status TEXT NOT NULL DEFAULT 'pending'
-        CONSTRAINT snippets_embedding_statuss_check
+        CONSTRAINT snippets_embedding_status_check
         CHECK (embedding_status IN ('pending', 'ready', 'failed')),
     embedding_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
