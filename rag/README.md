@@ -17,21 +17,23 @@ API 동작과 처리 상태의 공통 규칙은 [API_CONTRACT.md](../API_CONTRAC
 
 ## 먼저 조회
 
-아래 프로젝트와 ID는 실제 검증에 사용한 예시다.
-다른 PC의 DB에서는 먼저 해당 ID의 프로젝트·파일·함수·상태를 확인한다.
+Dev Container의 Bash에서 본인 DB의 프로젝트와 확인할 ID를 입력한다.
+출력된 프로젝트·파일·함수·상태를 확인한 뒤 적용 여부를 정한다.
 
 ```bash
-uv run --locked python -m rag.retry_embeddings --project mvp-save-test --id 5
+read -r -p "프로젝트 이름: " retry_project
+read -r -p "확인할 스니펫 ID: " retry_id
+uv run --locked python -m rag.retry_embeddings --project "$retry_project" --id "$retry_id"
 ```
 
 기본 실행은 조회 전용이다. 벡터 생성과 갱신은 `--apply`를 지정했을 때 수행한다.
 
 ## 명시적으로 재처리
 
-조회 결과가 원하는 대상인지 확인한 뒤 같은 프로젝트와 ID를 지정한다.
+조회 결과가 원하는 대상인지 확인한 뒤, 같은 Bash 터미널에서 위에 입력한 프로젝트와 ID로 실행한다.
 
 ```bash
-uv run --locked python -m rag.retry_embeddings --project mvp-save-test --id 5 --apply
+uv run --locked python -m rag.retry_embeddings --project "$retry_project" --id "$retry_id" --apply
 ```
 
 - 벡터가 NULL이고 상태가 `pending` 또는 `failed`인 행을 대상으로 한다.
@@ -43,7 +45,7 @@ uv run --locked python -m rag.retry_embeddings --project mvp-save-test --id 5 --
 - 갱신 0행이나 실패 상태 기록 오류는 현재 DB 상태를 다시 확인한다.
 - 새 INSERT를 만들지 않고 기존 원문·메타데이터·ID를 유지한다.
 
-현재 검증 DB의 id=5는 이미 `ready`이므로 재실행하면 `skip`이 정상이다.
+아래 2026-11-04 기록의 id=5는 검증 후 이미 `ready`가 됐다. 해당 DB에서 같은 행을 재실행하면 `skip`이 정상이다. 다른 환경의 id=5를 같은 행으로 가정하지 않는다.
 출력 앞부분의 상태는 처리 전 조회 값이고, 마지막 `Result`가 이번 실행 결과다.
 `updated_at`은 실제 상태·벡터 갱신 시 변경된다.
 
@@ -89,10 +91,13 @@ uv run --locked python -m unittest discover -s tests -p "test_*.py" -v
 각 단계 검증이 통과해야 다음 단계로 진행한다.
 
 ```bash
-uv run --locked python - --project mvp-save-test --id 5 --query "사용자들을 나이순으로 정렬하는 코드" < tests/manual_retry_embedding_check.py
+read -r -p "시험용 프로젝트 이름: " check_project
+read -r -p "벡터가 없는 시험용 스니펫 ID: " check_id
+read -r -p "그 코드를 찾을 자연어 질문: " check_query
+uv run --locked python - --project "$check_project" --id "$check_id" --query "$check_query" < tests/manual_retry_embedding_check.py
 ```
 
-이 검사는 선택한 기존 행의 상태·벡터를 실제로 변경한다.
+위 명령은 Dev Container Bash용이다. 이 검사는 선택한 기존 행의 상태·벡터를 실제로 변경한다. 이미 성공한 행의 벡터를 시험 목적으로 지우지 않는다.
 원문·메타데이터·행 수·다른 벡터 보존, 실패 후 복구,
 재실행 시 모델·저장 호출 없이 건너뜀, 의미 검색 반환을 확인한다.
 
@@ -114,3 +119,5 @@ uv run --locked python - --project mvp-save-test --id 5 --query "사용자들을
 
 위 순위는 해당 질문·데이터에서의 연결 검증 결과다.
 기존 모델 비교 실험 산출물은 유지하며, 추가 품질 평가는 별도로 진행한다.
+
+[전체 테스트 안내](../docs/TESTING.md) · [시스템 구조](../docs/ARCHITECTURE.md) · [문서 목차](../docs/README.md)
