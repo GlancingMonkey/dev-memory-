@@ -99,7 +99,7 @@ docker exec capstone-db psql -U capstone -d capstone -c "\d public.snippets"
 - embedding은 있고 embedding_status·embedding_error가 모두 없으면 002 migration을 적용한다.
 - 필요한 컬럼이 이미 있으면 해당 migration을 건너뛴다. 상태 컬럼이 일부만 있거나 타입이 다르면 DB 담당자와 현재 구조부터 확인한다.
 
-현재 DB에 필요한 명령만 선택해 적용한다.
+기존 테이블에 embedding과 상태 컬럼이 모두 없으면 **001 적용 → 컬럼 재확인 → 002 적용** 순서로 진행한다. 현재 DB에 필요한 명령만 선택해 적용한다.
 
 snippets 테이블이 없는 경우:
 
@@ -182,6 +182,7 @@ Backend가 실행 중인 상태에서 Dev Container의 **다른 터미널**로 �
 ```bash
 uv run --locked python - <<'PY'
 import json
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 samples = [
@@ -207,11 +208,15 @@ for file_path, function_name, code in samples:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urlopen(request, timeout=30) as response:
-        result = json.load(response)
-        print(file_path, response.status, result)
-        if result.get("embedding_status") != "ready":
-            raise SystemExit("Stop: check the saved ID and DB status before more requests")
+    try:
+        with urlopen(request, timeout=30) as response:
+            result = json.load(response)
+            print(file_path, response.status, result)
+            if result.get("embedding_status") != "ready":
+                raise SystemExit("Stop: check the saved ID and DB status before more requests")
+    except HTTPError as error:
+        print(file_path, error.code, error.read().decode("utf-8", errors="replace"))
+        raise SystemExit("Stop: inspect the response and DB before sending another POST")
 PY
 ```
 
@@ -306,3 +311,5 @@ Backend를 더 사용하지 않으면 실행 터미널에서 Ctrl+C로 종료한
 | Extension 원본 열기 실패 | 실제 로컬 파일, 열린 프로젝트 이름, 상대 경로 확인 |
 
 모델 비교 원본은 [기존 실험 폴더](../rag/experiments/embedding_compare/README.md)에 보존되어 있다. 추가 실행을 했다면 날짜·환경·SHA·실제 응답을 새 기록에 남긴다.
+
+[문서 목차](README.md) · [준비된 환경의 시연 순서](DEMO.md) · [자동·수동 테스트 안내](TESTING.md)
