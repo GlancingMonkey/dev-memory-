@@ -217,7 +217,7 @@ type FromWebview =
 // 저장 시도 한 건 — extension.ts 가 저장할 때마다 넘겨준다
 export interface SaveRecord {
   time: string;                    // ISO 시각
-  status: 'ok' | 'mock' | 'fail';
+  status: 'ok' | 'mock' | 'fail' | 'unconfirmed';
   id?: number;
   function_name: string | null;
   file_path: string;
@@ -225,7 +225,7 @@ export interface SaveRecord {
   end_line: number;
   error?: string;
   elapsedMs?: number;              // 요청~응답 걸린 시간
-  embedding?: EmbeddingStatus;     // 서버가 알려준 검색 준비 상태
+  embedding?: EmbeddingStatus | null;  // null이면 원문은 저장됐지만 검색 준비 상태는 미확정
 }
 const HISTORY_KEY = 'codeMemory.saveHistory';
 const HISTORY_MAX = 20;
@@ -1252,12 +1252,14 @@ function getHtml(webview: vscode.Webview): string {
       histBody.append(row);
     });
   }
-  // 저장됨 / 검색 준비됨 / 준비 중 / 검색 준비 실패 / mock / 실패
+  // 원문 저장 여부와 검색 준비 상태를 구분한다. pending은 처리 중이라는 뜻이 아니다.
   function pillOf(h) {
     if (h.status === 'mock') { return { cls: 'mock', text: 'mock' }; }
     if (h.status === 'fail') { return { cls: 'fail', text: '실패' }; }
+    if (h.status === 'unconfirmed') { return { cls: 'mock', text: '저장 여부 확인 필요' }; }
+    if (h.embedding === null) { return { cls: 'mock', text: '검색 준비 확인 필요' }; }
     if (h.embedding === 'ready') { return { cls: 'ok', text: '검색 준비됨' }; }
-    if (h.embedding === 'pending') { return { cls: 'mock', text: '준비 중' }; }
+    if (h.embedding === 'pending') { return { cls: 'mock', text: '임베딩 미처리' }; }
     if (h.embedding === 'failed') { return { cls: 'fail', text: '검색 준비 실패' }; }
     return { cls: 'ok', text: '저장됨' };
   }
@@ -1272,17 +1274,21 @@ function getHtml(webview: vscode.Webview): string {
   function showToast(rec) {
     const name = rec.function_name || String(rec.file_path || '').split('/').pop() || '';
     const embFailed = rec.status === 'ok' && rec.embedding === 'failed';
-    toast.className = 'toast ' + (embFailed ? 'mock' : rec.status);
+    const embUnconfirmed = rec.status === 'ok' && rec.embedding === null;
+    const warning = embFailed || embUnconfirmed || rec.status === 'unconfirmed';
+    toast.className = 'toast ' + (warning ? 'mock' : rec.status);
     let text;
     if (embFailed) { text = '저장됨 · 검색 준비 실패 · ' + name + ' · id ' + rec.id; }
+    else if (embUnconfirmed) { text = '원문 저장됨 · ' + name + ' · id ' + rec.id + ' · 검색 준비 확인 필요'; }
     else if (rec.status === 'ok') {
-      text = '저장됨 · ' + name + ' · id ' + rec.id + (rec.embedding === 'ready' ? ' · 검색 준비 완료' : rec.embedding === 'pending' ? ' · 검색 준비 중' : '');
+      text = '저장됨 · ' + name + ' · id ' + rec.id + (rec.embedding === 'ready' ? ' · 검색 준비 완료' : rec.embedding === 'pending' ? ' · 임베딩 미처리' : '');
     }
+    else if (rec.status === 'unconfirmed') { text = '저장 여부 확인 필요 · ' + name; }
     else if (rec.status === 'mock') { text = '[mock] 저장 흉내 · ' + name; }
     else if (rec.status === 'copy') { text = '복사됨 · ' + name; }
     else { text = '저장 실패 · ' + name; }
-    toast.replaceChildren(icon(rec.status === 'fail' || embFailed ? 'alert' : 'check'), el('span', 'grow', text));
-    if (rec.status === 'ok' || rec.status === 'mock') {
+    toast.replaceChildren(icon(rec.status === 'fail' || warning ? 'alert' : 'check'), el('span', 'grow', text));
+    if ((rec.status === 'ok' && rec.embedding === 'ready') || rec.status === 'mock') {
       const go = el('button', 'link-btn', '검색에서 확인');
       go.type = 'button';
       go.addEventListener('click', function () { toast.hidden = true; input.value = name; search(name); });

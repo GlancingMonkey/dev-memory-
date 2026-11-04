@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { COMPARE_SCHEME, compareDocs, SaveRecord, SearchViewProvider } from './sidebar';
 import {
-  adjustEndLine, clamp, EmbeddingStatus, findFunctionNameByRegex, formatSeconds, parseSaveResponse, pickSymbol, SimpleSymbol,
+  adjustEndLine, clamp, EmbeddingStatus, findFunctionNameByRegex, formatSeconds, parseSaveResponse, pickSymbol, SaveUnconfirmedError, SimpleSymbol,
 } from './logic';
 // ─────────────────────────────────────────────
 // 1. 스니펫의 모양
@@ -157,8 +157,8 @@ interface SaveResult {
   mock: boolean;                 // true 면 실제 저장이 아니다
   detail: string;                // 출력 패널에 남길 근거 (주소, HTTP 상태, 응답 원문)
   elapsedMs: number;             // 요청~응답까지 걸린 시간
-  embedding?: EmbeddingStatus;   // 서버가 알려준 검색 준비 상태 (pending / ready / failed)
-  embeddingError?: string;
+  embedding?: EmbeddingStatus | null;   // null이면 원문 저장은 확인됐지만 검색 준비 상태는 미확정
+  embeddingError?: string | null;
 }
 
 async function postSnippet(snippet: Snippet): Promise<SaveResult> {
@@ -186,6 +186,7 @@ async function postSnippet(snippet: Snippet): Promise<SaveResult> {
   };
 
   let res: Response;
+  let text: string;
   try {
     res = await fetch(url, {
       method: 'POST',
@@ -193,26 +194,22 @@ async function postSnippet(snippet: Snippet): Promise<SaveResult> {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutSec * 1000),
     });
+    text = await res.text();   // 응답 본문을 읽는 중의 시간 초과도 같은 안내로 처리한다.
   } catch (err) {
     // 시간 초과: 서버는 이미 저장했을 수 있다 → 다시 보내지 말고 확인부터 하게 안내
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-      throw new Error(
-        `응답 시간 초과 (${timeoutSec}초). 서버에는 저장됐을 수 있으니 다시 누르지 말고 서버 로그·DB 를 먼저 확인하세요.`
+      throw new SaveUnconfirmedError(
+        `응답 시간 초과 (${timeoutSec}초). 서버에는 저장됐을 수 있습니다`
       );
     }
-    // 서버가 꺼져 있음 / 주소 틀림
+    // 응답을 받지 못했다는 이유만으로 서버에 저장되지 않았다고 단정하지 않는다.
     const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(`서버에 연결할 수 없습니다: ${url} (${reason})`);
+    throw new SaveUnconfirmedError(`저장 응답을 받지 못했습니다: ${url} (${reason})`);
   }
 
-  const text = await res.text();
   const elapsedMs = Date.now() - started;
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} (${formatSeconds(elapsedMs)}): ${text}`);
-  }
-
-  // 성공 응답인데 id 가 없으면 성공으로 치지 않는다 (logic.ts)
-  const parsed = parseSaveResponse(text);
+  // HTTP 503도 계약에 따라 읽는다. 원문 저장이 확인된 ID가 있으면 결과와 기록에 유지한다.
+  const parsed = parseSaveResponse(text, res.status);
   return {
     id: parsed.id,
     mock: false,
@@ -296,17 +293,21 @@ export function activate(context: vscode.ExtensionContext) {
           offer(vscode.window.showInformationMessage, `[mock] 저장 흉내만 냈습니다 — ${where}`);
           await searchProvider.addSaveRecord({ ...base, status: 'mock', elapsedMs: saved.elapsedMs });
         } else {
-          // 팀 합의: 원문 저장은 성공했어도 검색 준비(임베딩)는 실패할 수 있다 → 따로 안내
-          const ready = saved.embedding === 'ready' ? ' · 검색 준비 완료'
-            : saved.embedding === 'pending' ? ' · 검색 준비 중'
-            : '';
-          output.appendLine(`→ 저장 완료 id=${saved.id}${saved.embedding ? ` (검색 준비: ${saved.embedding})` : ''}\n`);
-          if (saved.embedding === 'failed') {
-            const why = saved.embeddingError ? ` — ${saved.embeddingError}` : '';
-            offer(vscode.window.showWarningMessage,
-              `저장은 됐지만 검색 준비에 실패했습니다 (id ${saved.id})${why}. 원문은 남아 있고, 재처리 후 검색됩니다.`);
+          // 원문 저장 여부와 검색 준비 여부를 따로 안내한다.
+          const state = saved.embedding === null ? '확인 불가' : saved.embedding;
+          output.appendLine(`→ 원문 저장 완료 id=${saved.id} (검색 준비: ${state})\n`);
+          if (saved.embedding === 'ready') {
+            offer(vscode.window.showInformationMessage,
+              `저장했습니다 (id ${saved.id}) — ${where} · 검색 준비 완료`);
+          } else if (saved.embedding === 'failed') {
+            const advice = saved.embeddingError === 'embedding_input_invalid'
+              ? '코드가 비어 있거나 임베딩 입력 한도를 넘었습니다. 같은 입력을 그대로 재처리하지 말고 해당 ID와 입력을 확인하세요.'
+              : '같은 코드를 다시 저장하지 말고 해당 ID의 상태를 확인한 뒤 재처리하세요.';
+            void vscode.window.showWarningMessage(
+              `원문은 저장됐지만 검색 준비에 실패했습니다 (id ${saved.id}). ${advice}`);
           } else {
-            offer(vscode.window.showInformationMessage, `저장했습니다 (id ${saved.id}) — ${where}${ready}`);
+            void vscode.window.showWarningMessage(
+              `원문은 저장됐습니다 (id ${saved.id}). 검색 준비 상태는 확인할 수 없습니다. 같은 요청을 다시 보내지 말고 해당 ID의 DB 상태를 확인하세요.`);
           }
           await searchProvider.addSaveRecord({
             ...base, status: 'ok', id: saved.id, elapsedMs: saved.elapsedMs,
@@ -315,9 +316,17 @@ export function activate(context: vscode.ExtensionContext) {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        output.appendLine(`→ 저장 실패: ${message}\n`);
-        vscode.window.showErrorMessage(`저장 실패: ${message}`);
-        await searchProvider.addSaveRecord({ ...base, status: 'fail', error: message.slice(0, 120) });
+        const unconfirmed = err instanceof SaveUnconfirmedError;
+        const title = unconfirmed ? '저장 여부 확인 필요' : '저장 요청 실패';
+        output.appendLine(`→ ${title}: ${message}\n`);
+        if (unconfirmed) {
+          void vscode.window.showWarningMessage(`${title}: ${message}`);
+        } else {
+          void vscode.window.showErrorMessage(`${title}: ${message}`);
+        }
+        await searchProvider.addSaveRecord({
+          ...base, status: unconfirmed ? 'unconfirmed' : 'fail', error: message.slice(0, 120),
+        });
       }
 
       output.show(true);

@@ -6,7 +6,7 @@ VS Code에서 선택한 코드·메타데이터를 저장하고, Backend의 실�
 
 - 선택한 코드의 저장과 실제 DB 생성 id 확인 (저장 중 중복 실행 방지, 시간 초과 안내, 걸린 시간 기록)
 - 선택 없이 커서만 두면 그 함수 전체 저장, 함수 이름은 VS Code 코드 구조로 정확하게 추출
-- 서버가 알려주는 검색 준비 상태(pending / ready / failed) 안내
+- 공식 저장 응답의 ready / failed / null을 읽어 원문 저장과 검색 준비를 구분하고, 확인된 ID를 저장 기록에 유지
 - 저장 알림의 **검색에서 확인** 버튼으로 방금 저장한 함수 이름 바로 검색
 - 자연어 검색과 결과의 순위·id·유사도·파일 위치·줄 번호가 붙은 코드 표시
 - 열린 프로젝트의 원본 파일과 줄 범위로 이동 (이 PC에 원본이 없으면 미리 "원본 없음" 표시)
@@ -22,14 +22,14 @@ VS Code에서 선택한 코드·메타데이터를 저장하고, Backend의 실�
 - 선택한 코드 ↔ 저장된 코드 나란히 비교
 - VS Code 시작 화면의 **Code Memory 시작하기** 단계별 안내
 
-저장·검색 요청과 응답은 [API_CONTRACT.md](../API_CONTRACT.md)를 따른다. 현재 새 저장 코드의 자동 Embedding과 LLM 답변은 후속 작업이다.
+저장·검색 요청과 응답은 [API_CONTRACT.md](../API_CONTRACT.md)를 따른다. Backend는 원문을 먼저 커밋한 뒤 자동 Embedding과 벡터·상태 저장까지 기다려 응답한다. 저장과 검색은 LLM을 호출하지 않는다. RAG/LLM 답변은 후속 작업이다.
 
 ## 실행 전 준비
 
 이 가이드는 **같은 PC에서 Backend는 Dev Container, Extension은 Windows 로컬**로 실행한 검증 방법이다.
 
 - Backend의 /health와 /docs에 Windows 브라우저로 접속할 수 있어야 한다.
-- 실제 검색에는 미리 Embedding이 저장된 스니펫이 필요하다. [개발 가이드](../docs/DEVELOPMENT.md)의 데이터 준비 절차를 따른다.
+- 실제 DB에 embedding vector(768), embedding_status, embedding_error가 필요하다. [개발 가이드](../docs/DEVELOPMENT.md)에서 스키마와 Backend의 E5 warmup을 확인한다. 새 저장 응답이 ready이면 검색할 수 있고, 기존 미처리·실패 행은 [재처리 CLI](../rag/README.md)로 확인한다.
 - Windows에도 Node.js·npm이 필요하다. Dev Container의 Node 설치와 Windows 설치는 별개다.
 - package.json의 VS Code 요구 범위는 `^1.138.0`이다. [통합 검증](../docs/INTEGRATION_TEST_2026-10-28.md)에서는 VS Code 1.143.1, Node 24.20.0, npm 11.19.0을 사용했다.
 
@@ -94,7 +94,7 @@ Mock이 true이면 서버를 호출하지 않는다. 검색은 질문과 관계�
 4. 오른쪽 아래에 `Code Memory: 저장 중…`이 뜬다. 응답이 올 때까지 저장 명령을 다시 실행해도 요청을 보내지 않는다.
 5. 출력 → Code Memory에서 POST 주소·HTTP 상태·실제 반환 id를 확인한다.
 6. DB에서 그 id를 조회해 코드 원문을 포함한 7개 저장 필드를 대조한다.
-7. 저장 알림의 **검색에서 확인**을 누르면 검색 패널이 열리고 함수 이름(없으면 파일 이름)으로 바로 검색한다. 검색 패널이 열려 있으면 패널 아래에도 같은 알림이 잠깐 뜬다.
+7. ready 응답의 **검색에서 확인**을 누르면 검색 패널이 열리고 함수 이름(없으면 파일 이름)으로 바로 검색한다. failed 또는 상태 확인 불가 응답은 경고와 저장된 ID를 안내한다. 검색 패널이 열려 있으면 패널 아래에도 결과 알림이 잠깐 뜬다.
 
 ### 함수 이름
 
@@ -102,20 +102,27 @@ Mock이 true이면 서버를 호출하지 않는다. 검색은 질문과 관계�
 
 ### 검색 준비 상태
 
-팀 합의로 Backend가 저장 응답에 임베딩 처리 상태를 붙이면 그대로 안내한다. 필드 이름이 확정 전이라 `embedding_status`, `embedding.status`, `status` 중 `pending`/`ready`/`failed` 값을 읽고, 실패 이유는 `embedding_error`, `embedding.error`, `error`, `reason`에서 읽는다.
+확정된 필드는 id, message, embedding_status, embedding_error다. message는 원문 저장 완료 시 `snippet saved`다. 과거 별칭 필드는 공식 필드를 대신하지 않는다.
 
-| 상태 | 알림 | 저장 기록 |
+| HTTP / 상태 | 알림 | 저장 기록 |
 |---|---|---|
-| `ready` | 저장했습니다 … · 검색 준비 완료 | 검색 준비됨 |
-| `pending` | 저장했습니다 … · 검색 준비 중 | 준비 중 |
-| `failed` | 저장은 됐지만 검색 준비에 실패했습니다 (이유) — 원문은 남아 있음 | 검색 준비 실패 |
-| 없음 | 저장했습니다 … (예전과 같음) | 저장됨 |
+| 200 / ready | 저장 완료 · 검색 준비 완료 | ID 유지 · 검색 준비됨 |
+| 200 / failed | 원문 저장 완료 · 검색 준비 실패 | ID 유지 · 검색 준비 실패 |
+| 503 / 저장된 ID + null | 원문 저장 완료 · 검색 준비 상태 확인 불가 | ID 유지 · 검색 준비 확인 필요 |
+| 503 / detail만 있음, 시간 초과, 응답 확인 불가 | 저장 여부 확인 필요 · 재전송 전 서버 로그·DB 확인 | 저장 여부 확인 필요 |
+| 422 | 요청 필드·입력값 검증 오류 | 실패 |
+
+HTTP 503에 id와 message가 있고 embedding_status=null, embedding_error=embedding_storage_failed이면 원문은 저장된 상태다. ID를 보존하고 해당 행부터 확인한다. null은 API가 최종 상태를 확인하지 못했다는 뜻이며 DB의 새 상태 값이 아니다.
+
+DB의 pending은 임베딩 미처리 상태다. 과거 저장 기록에 pending이 있으면 `임베딩 미처리`로 표시하며 백그라운드 처리 중이라고 안내하지 않는다. 현재 POST의 정상 완료 응답 상태는 ready 또는 failed다.
+
+입력 한도 초과의 failed/embedding_input_invalid는 같은 입력을 그대로 재처리하지 않는다. 생성·저장 실패는 기존 ID의 원문과 상태를 확인한 뒤 재처리 CLI를 사용한다. 같은 POST를 자동 재전송하지 않는다.
 
 ### 저장 전 확인
 
 `codeMemory.confirmFunctionName`을 켜면 저장 직전에 자동으로 찾은 함수 이름이 입력창에 뜬다. 고치거나 그대로 Enter, 비우면 이름 없이(`null`) 저장, Esc는 저장 취소다. 정규식 추출이 틀렸을 때 쓴다.
 
-저장할 때마다 검색 패널 아래 **저장 기록**에 한 줄씩 남는다 (최대 20개, 폴더별). `저장됨`(실제 id 포함) / `mock` / `실패`(이유 포함)로 구분되고, 줄을 누르면 그 함수 이름으로 검색한다. 통합 테스트에서 저장 id를 적을 때 쓴다.
+저장할 때마다 검색 패널 아래 **저장 기록**에 한 줄씩 남는다 (최대 20개, 폴더별). 원문 저장이 확인된 경우 실제 ID와 검색 준비 상태를 유지한다. mock, 요청 실패, 저장 여부 확인 필요도 구분한다. 기록을 누르면 함수 이름으로 검색하며 실패·확인 불가 상태만으로 검색 가능하다고 판단하지 않는다.
 
 저장 요청은 `codeMemory.saveTimeoutSeconds`(기본 10초) 안에 응답이 없으면 `응답 시간 초과`로 안내한다. 출력 패널의 POST 줄 끝과 저장 기록에 실제로 걸린 시간이 남으니, 제한 시간을 정할 때 이 값을 쓴다. 이때 서버에는 저장됐을 수 있으므로 다시 저장하지 말고 서버 로그·DB를 먼저 확인한다. 시간 초과 뒤 자동으로 다시 보내지 않는다.
 
@@ -162,7 +169,7 @@ cd C:\dev\capstone-rag\extension
 npm.cmd run test:unit
 ```
 
-`out/` 폴더에 컴파일 결과가 생긴다. 커밋하지 않는다.
+`out/` 폴더에 컴파일 결과가 생긴다. 커밋하지 않는다. 저장 응답 검사는 ready·failed, 저장된 ID가 있는 503과 없는 503, 계약에 맞지 않는 응답을 포함한다. [2026-11-05 검증](../docs/INTEGRATION_TEST_2026-11-05.md)에서는 26개 테스트가 통과했다.
 
 ## .vsix 패키지 만들기
 
@@ -182,7 +189,9 @@ npm.cmd run vsix
 | npm ci가 esbuild.exe의 EPERM으로 실패 | 실행 중인 watch·디버그 작업을 먼저 종료한 뒤 재시도 |
 | 잘못된 problemMatcher: $esbuild-watch | 권장 esbuild problem matcher 확장 확인 또는 사전 빌드 후 위 명령으로 개발 호스트 실행 |
 | 서버 연결 실패 | Backend 실행, apiUrl, Dev Container 8000 포트 전달 확인 |
-| 저장 응답 시간 초과 | 다시 저장하지 말고 서버 로그와 DB에서 저장 여부부터 확인 |
+| 저장 응답 시간 초과 / 저장 여부 확인 필요 | 같은 POST를 반복하지 말고 서버 로그와 DB에서 저장 여부부터 확인 |
+| 503 응답에 저장된 ID가 있음 | 원문은 저장됨. 해당 ID의 DB 상태 확인 후 기존 행 재처리 |
+| embedding_input_invalid | 원문은 보존됨. 입력 한도와 코드를 확인하고 같은 입력의 반복 재처리 중단 |
 | 검색 응답 시간 초과 | 첫 검색은 모델 준비로 오래 걸릴 수 있음. 잠시 후 다시 검색 |
 | 첫 검색이 오래 걸림 | Swagger에서 모델 준비와 첫 검색이 끝난 뒤 UI 검색 |
 | 결과가 없음 | DB의 검색 가능한 embedding 행이 준비됐는지 확인 |
@@ -190,4 +199,6 @@ npm.cmd run vsix
 | 상태 표시줄이 계속 mock | 설정의 codeMemory.mock 체크 해제 여부 확인 |
 | Ctrl+Alt+F가 동작하지 않음 | 다른 프로그램·확장이 같은 단축키를 쓰는지 확인. 명령 팔레트의 Code Memory: 검색창 열기로 대신 실행 |
 
-전체 실행 순서와 수동 Embedding은 [개발 가이드](../docs/DEVELOPMENT.md), 실제 확인한 결과는 [통합 검증 기록](../docs/INTEGRATION_TEST_2026-10-28.md)에 있다.
+전체 실행 순서와 자동 Embedding은 [개발 가이드](../docs/DEVELOPMENT.md), 기존 ID 재처리는 [RAG 가이드](../rag/README.md)를 따른다. 실제 확인한 결과는 [2026-11-05 검증 기록](../docs/INTEGRATION_TEST_2026-11-05.md), 이전 수동 벡터 준비 단계의 기록은 [2026-10-28 검증](../docs/INTEGRATION_TEST_2026-10-28.md)에 보존한다.
+
+과거 `scripts/mock_server.py`는 HTTP 201/id만 반환하는 초기 저장 시험 도구다. 현재 API 계약 검증에는 실제 Backend를 사용한다. Extension 설정 mock=true는 이 스크립트를 호출하지 않는 별도의 UI 모의 모드다.

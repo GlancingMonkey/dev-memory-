@@ -112,43 +112,66 @@ export function reindent(code: string, prefix: string, eol: string): string {
     .join(eol);
 }
 
-// ── 5. 저장 응답 읽기
-//    계약: HTTP 200 { id, message }. 팀 합의로 임베딩 처리 상태(pending/ready/failed)와
-//    실패 이유가 붙을 수 있다 — 필드 이름이 확정 전이라 몇 가지 이름을 받아준다.
+// ── 5. API_CONTRACT.md에 확정된 저장 응답 읽기
+// pending은 기존 저장 기록에서만 사용한다. 현재 POST 응답은 ready / failed / null이다.
 export type EmbeddingStatus = 'pending' | 'ready' | 'failed';
 
 export interface SaveResponse {
   id: number;
-  embedding?: EmbeddingStatus;   // 서버가 안 알려주면 undefined
-  embeddingError?: string;
+  embedding: EmbeddingStatus | null;
+  embeddingError: string | null;
 }
 
-const EMBEDDING_VALUES = new Set(['pending', 'ready', 'failed']);
+// 요청 실패와 저장 여부를 확인하지 못한 경우를 구분한다. 자동 재전송하지 않는다.
+export class SaveUnconfirmedError extends Error {
+  constructor(reason: string) {
+    super(`${reason}. 같은 요청을 다시 보내지 말고 서버 로그·DB를 먼저 확인하세요.`);
+    this.name = 'SaveUnconfirmedError';
+  }
+}
 
-export function parseSaveResponse(text: string): SaveResponse {
-  let data: Record<string, unknown>;
+const EMBEDDING_ERROR_CODES = new Set([
+  'embedding_input_invalid',
+  'embedding_generation_failed',
+  'embedding_storage_failed',
+]);
+
+export function parseSaveResponse(text: string, httpStatus = 200): SaveResponse {
+  if (httpStatus === 422) {
+    throw new Error('HTTP 422: 저장 요청의 필수 필드와 입력값을 확인하세요.');
+  }
+  if (httpStatus !== 200 && httpStatus !== 503) {
+    throw new SaveUnconfirmedError(`HTTP ${httpStatus}: 저장 완료 여부를 확인하지 못했습니다`);
+  }
+
+  let value: unknown;
   try {
-    data = JSON.parse(text) as Record<string, unknown>;
+    value = JSON.parse(text);
   } catch {
-    throw new Error(`응답이 JSON 이 아닙니다: ${text.slice(0, 200)}`);
+    throw new SaveUnconfirmedError(`HTTP ${httpStatus}: 응답이 JSON이 아니어서 저장 여부를 확인하지 못했습니다`);
   }
-  if (!data || typeof data !== 'object' || typeof data.id !== 'number') {
-    throw new Error(`응답에 id 가 없습니다: ${text.slice(0, 200)}`);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new SaveUnconfirmedError(`HTTP ${httpStatus}: 저장 응답 형식을 확인할 수 없습니다`);
+  }
+  const data = value as Record<string, unknown>;
+  if (typeof data.id !== 'number' || !Number.isSafeInteger(data.id) || data.id <= 0
+      || data.message !== 'snippet saved') {
+    throw new SaveUnconfirmedError(`HTTP ${httpStatus}: 저장된 ID와 완료 메시지를 확인하지 못했습니다`);
   }
 
-  const nested = (typeof data.embedding === 'object' && data.embedding !== null)
-    ? data.embedding as Record<string, unknown>
-    : {};
-  const rawStatus = [data.embedding_status, nested.status, data.status, data.embedding]
-    .find((v) => typeof v === 'string' && EMBEDDING_VALUES.has(v.toLowerCase()));
-  const rawError = [data.embedding_error, nested.error, nested.reason, data.error, data.reason]
-    .find((v) => typeof v === 'string' && v.trim().length > 0);
-
-  return {
-    id: data.id,
-    embedding: typeof rawStatus === 'string' ? rawStatus.toLowerCase() as EmbeddingStatus : undefined,
-    embeddingError: typeof rawError === 'string' ? rawError : undefined,
-  };
+  // 503이어도 이 응답은 원문 저장이 확인됐다. ID를 유지하고 검색 준비만 미확정으로 표시한다.
+  if (httpStatus === 503 && data.embedding_status === null
+      && data.embedding_error === 'embedding_storage_failed') {
+    return { id: data.id, embedding: null, embeddingError: data.embedding_error };
+  }
+  if (httpStatus === 200 && data.embedding_status === 'ready' && data.embedding_error === null) {
+    return { id: data.id, embedding: 'ready', embeddingError: null };
+  }
+  if (httpStatus === 200 && data.embedding_status === 'failed'
+      && typeof data.embedding_error === 'string' && EMBEDDING_ERROR_CODES.has(data.embedding_error)) {
+    return { id: data.id, embedding: 'failed', embeddingError: data.embedding_error };
+  }
+  throw new SaveUnconfirmedError(`HTTP ${httpStatus}: ID ${data.id}의 응답이 저장 API 계약과 다릅니다`);
 }
 
 // ── 6. 기타
