@@ -16,6 +16,18 @@
       {
         "command": "codeMemory.saveSnippet",
         "title": "Code Memory: 선택한 코드 저장"
+      },
+      {
+        "command": "codeMemory.focusSearch",
+        "title": "Code Memory: 검색창 열기"
+      },
+      {
+        "command": "codeMemory.switchMode",
+        "title": "Code Memory: 모드 바꾸기 (mock / 실제 서버)"
+      },
+      {
+        "command": "codeMemory.findSimilar",
+        "title": "Code Memory: 비슷한 코드 찾기"
       }
     ],
     "menus": {
@@ -24,6 +36,11 @@
           "command": "codeMemory.saveSnippet",
           "when": "editorHasSelection",
           "group": "navigation@1"
+        },
+        {
+          "command": "codeMemory.findSimilar",
+          "when": "editorHasSelection",
+          "group": "navigation@2"
         }
       ]
     },
@@ -32,6 +49,10 @@
         "command": "codeMemory.saveSnippet",
         "key": "ctrl+alt+s",
         "when": "editorHasSelection"
+      },
+      {
+        "command": "codeMemory.focusSearch",
+        "key": "ctrl+alt+f"
       }
     ],
     "viewsContainers": {
@@ -64,6 +85,18 @@
           "type": "boolean",
           "default": true,
           "description": "백엔드 없이 가짜 응답으로 테스트"
+        },
+        "codeMemory.searchLimit": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "검색 결과 최대 개수 (API 계약 범위 1~20)"
+        },
+        "codeMemory.confirmFunctionName": {
+          "type": "boolean",
+          "default": false,
+          "description": "저장하기 전에 자동으로 찾은 함수 이름을 확인·수정하는 입력창 띄우기"
         }
       }
     }

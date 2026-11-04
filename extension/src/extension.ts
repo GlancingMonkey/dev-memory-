@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { SearchViewProvider } from './sidebar';
+import { SaveRecord, SearchViewProvider } from './sidebar';
 // ─────────────────────────────────────────────
 // 1. 스니펫의 모양
 //    Snippet   = 백엔드로 "보내는" 객체. 계약의 7개 필드만 들어간다.
@@ -212,6 +212,8 @@ async function postSnippet(snippet: Snippet): Promise<SaveResult> {
 let saving = false;
 
 export function activate(context: vscode.ExtensionContext) {
+  const searchProvider = new SearchViewProvider(context.workspaceState);
+
   const command = vscode.commands.registerCommand('codeMemory.saveSnippet', async () => {
     if (saving) {
       vscode.window.showWarningMessage('이전 저장이 아직 진행 중입니다. 끝난 뒤 다시 시도하세요.');
@@ -224,34 +226,73 @@ export function activate(context: vscode.ExtensionContext) {
     }
     const { snippet, absolutePath } = collected;
 
-    output.appendLine(`[${new Date().toLocaleTimeString()}] 보낼 스니펫 (원본: ${absolutePath})`);
-    output.appendLine(JSON.stringify(snippet, null, 2));
-
     saving = true;
     try {
-      const saved = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Code Memory: 저장 중…' },
-        () => postSnippet(snippet)
-      );
-      const where = snippet.function_name ?? snippet.file_path;
-      output.appendLine(`→ ${saved.detail}`);
-
-      if (saved.mock) {
-        output.appendLine(`→ [mock] 실제 저장 아님 (가짜 id=${saved.id})\n`);
-        vscode.window.showInformationMessage(`[mock] 저장 흉내만 냈습니다 — ${where}`);
-      } else {
-        output.appendLine(`→ 저장 완료 id=${saved.id}\n`);
-        vscode.window.showInformationMessage(`저장했습니다 (id ${saved.id}) — ${where}`);
+      // 설정이 켜져 있으면 저장 전에 함수 이름 확인 (정규식 자동 추출이 틀릴 수 있다)
+      if (vscode.workspace.getConfiguration('codeMemory').get<boolean>('confirmFunctionName', false)) {
+        const name = await vscode.window.showInputBox({
+          title: 'Code Memory: 함수 이름 확인',
+          value: snippet.function_name ?? '',
+          prompt: '자동으로 찾은 이름입니다. 고치거나 그대로 Enter — 비우면 이름 없이 저장, Esc 는 저장 취소',
+          placeHolder: '함수 이름 (비워도 됨)',
+        });
+        if (name === undefined) {
+          vscode.window.setStatusBarMessage('Code Memory: 저장 취소', 3000);
+          return;
+        }
+        snippet.function_name = name.trim() || null;
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      output.appendLine(`→ 저장 실패: ${message}\n`);
-      vscode.window.showErrorMessage(`저장 실패: ${message}`);
+
+      output.appendLine(`[${new Date().toLocaleTimeString()}] 보낼 스니펫 (원본: ${absolutePath})`);
+      output.appendLine(JSON.stringify(snippet, null, 2));
+
+      const where = snippet.function_name ?? snippet.file_path;
+      // "검색에서 확인" 버튼: 함수 이름(없으면 파일 이름)으로 바로 검색
+      const query = snippet.function_name ?? snippet.file_path.split('/').pop() ?? snippet.file_path;
+      const offerSearch = (text: string) => {
+        // await 하지 않는다 — 알림이 떠 있는 동안 다음 저장이 막히지 않게
+        void vscode.window.showInformationMessage(text, '검색에서 확인').then((choice) => {
+          if (choice) {
+            void searchProvider.searchFor(query);
+          }
+        });
+      };
+      // 사이드바 "저장 기록"에 남길 공통 정보
+      const base: Omit<SaveRecord, 'status'> = {
+        time: new Date().toISOString(),
+        function_name: snippet.function_name,
+        file_path: snippet.file_path,
+        start_line: snippet.start_line,
+        end_line: snippet.end_line,
+      };
+
+      try {
+        const saved = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: 'Code Memory: 저장 중…' },
+          () => postSnippet(snippet)
+        );
+        output.appendLine(`→ ${saved.detail}`);
+
+        if (saved.mock) {
+          output.appendLine(`→ [mock] 실제 저장 아님 (가짜 id=${saved.id})\n`);
+          offerSearch(`[mock] 저장 흉내만 냈습니다 — ${where}`);
+          await searchProvider.addSaveRecord({ ...base, status: 'mock' });
+        } else {
+          output.appendLine(`→ 저장 완료 id=${saved.id}\n`);
+          offerSearch(`저장했습니다 (id ${saved.id}) — ${where}`);
+          await searchProvider.addSaveRecord({ ...base, status: 'ok', id: saved.id });
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        output.appendLine(`→ 저장 실패: ${message}\n`);
+        vscode.window.showErrorMessage(`저장 실패: ${message}`);
+        await searchProvider.addSaveRecord({ ...base, status: 'fail', error: message.slice(0, 120) });
+      }
+
+      output.show(true);
     } finally {
       saving = false;
     }
-
-    output.show(true);
   });
 
   // 사이드바 검색 패널 등록
@@ -259,12 +300,146 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       SearchViewProvider.viewId,
-      new SearchViewProvider(),
+      searchProvider,
       { webviewOptions: { retainContextWhenHidden: true } }
     )
   );
 
-  context.subscriptions.push(command, output);
+  // ─────────────────────────────────────────────
+  // 상태 표시줄: mock 인지, 실제 서버면 연결됐는지 (GET /health) 항상 보이게.
+  // 누르면 mock / 실제 서버 / 주소 바꾸기를 고르는 창이 뜬다.
+  // ─────────────────────────────────────────────
+  const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
+  status.command = 'codeMemory.switchMode';
+  let healthSeq = 0;   // 확인 요청이 겹치면 마지막 것만 반영
+
+  const updateStatus = async () => {
+    const config = vscode.workspace.getConfiguration('codeMemory');
+    const seq = ++healthSeq;
+    if (config.get<boolean>('mock', true)) {
+      status.text = '$(beaker) Code Memory: mock';
+      status.tooltip = 'mock 모드 — 서버를 호출하지 않습니다 (가짜 저장·샘플 검색). 눌러서 모드 바꾸기';
+      status.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+      return;
+    }
+    const apiUrl = config.get<string>('apiUrl', 'http://localhost:8000').replace(/\/+$/, '');
+    const host = apiUrl.replace(/^https?:\/\//, '');
+    status.text = `$(sync~spin) Code Memory: ${host}`;
+    status.tooltip = `${apiUrl} 연결 확인 중…`;
+    status.backgroundColor = undefined;
+
+    let ok = false;
+    let reason = '';
+    try {
+      const res = await fetch(`${apiUrl}/health`, { signal: AbortSignal.timeout(3000) });
+      ok = res.ok;
+      reason = ok ? '' : `HTTP ${res.status}`;
+    } catch (err) {
+      reason = err instanceof Error && err.name === 'TimeoutError' ? '3초 동안 응답 없음' : '연결할 수 없음';
+    }
+    if (seq !== healthSeq) {
+      return;   // 그 사이 설정이 바뀌었으면 이 결과는 버린다
+    }
+    if (ok) {
+      status.text = `$(pass-filled) Code Memory: ${host}`;
+      status.tooltip = `실제 서버 ${apiUrl} 연결됨 (/health 응답 정상 — DB 저장 성공까지 뜻하지는 않음). 눌러서 모드 바꾸기`;
+      status.backgroundColor = undefined;
+    } else {
+      status.text = `$(error) Code Memory: ${host} 연결 안 됨`;
+      status.tooltip = `${apiUrl}/health 확인 실패 (${reason}). 서버 실행·주소·포트 전달을 확인하세요. 눌러서 모드 바꾸기`;
+      status.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+    }
+  };
+
+  void updateStatus();
+  status.show();
+  const healthTimer = setInterval(() => {
+    if (!vscode.workspace.getConfiguration('codeMemory').get<boolean>('mock', true)) {
+      void updateStatus();   // 실제 서버 모드일 때만 30초마다 다시 확인
+    }
+  }, 30000);
+  context.subscriptions.push(
+    status,
+    { dispose: () => clearInterval(healthTimer) },
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('codeMemory')) {
+        void updateStatus();
+      }
+    })
+  );
+
+  // 모드 빠르게 바꾸기 (상태 표시줄 클릭)
+  const switchMode = vscode.commands.registerCommand('codeMemory.switchMode', async () => {
+    const config = vscode.workspace.getConfiguration('codeMemory');
+    const mock = config.get<boolean>('mock', true);
+    const apiUrl = config.get<string>('apiUrl', 'http://localhost:8000');
+    // 워크스페이스에 값이 따로 있으면 거기를, 아니면 사용자 설정을 바꾼다
+    const targetOf = (key: string) =>
+      config.inspect(key)?.workspaceValue !== undefined
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
+
+    type Item = vscode.QuickPickItem & { id: 'mock' | 'real' | 'url' | 'health' | 'settings' };
+    const items: Item[] = [
+      { id: 'mock', label: '$(beaker) mock', description: mock ? '현재' : '', detail: '서버를 호출하지 않음 — 가짜 저장, 샘플 검색' },
+      { id: 'real', label: '$(plug) 실제 서버', description: mock ? '' : '현재', detail: apiUrl },
+      { id: 'url', label: '$(edit) 서버 주소 바꾸기…' },
+      { id: 'health', label: '$(refresh) 연결 다시 확인' },
+      { id: 'settings', label: '$(gear) 설정 열기' },
+    ];
+    const pick = await vscode.window.showQuickPick(items, { title: 'Code Memory 모드' });
+    if (!pick) {
+      return;
+    }
+    switch (pick.id) {
+      case 'mock':
+        await config.update('mock', true, targetOf('mock'));
+        break;
+      case 'real':
+        await config.update('mock', false, targetOf('mock'));
+        break;
+      case 'url': {
+        const value = await vscode.window.showInputBox({
+          title: '백엔드 서버 주소',
+          value: apiUrl,
+          prompt: '예: http://127.0.0.1:8000',
+          validateInput: (v) => (/^https?:\/\/[^\s]+$/.test(v.trim()) ? undefined : 'http:// 또는 https:// 로 시작하는 주소를 입력하세요'),
+        });
+        if (value) {
+          await config.update('apiUrl', value.trim().replace(/\/+$/, ''), targetOf('apiUrl'));
+        }
+        break;
+      }
+      case 'health':
+        await updateStatus();
+        break;
+      case 'settings':
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'codeMemory');
+        break;
+    }
+  });
+
+  // 선택한 코드로 비슷한 코드 찾기 (우클릭 메뉴) — 기존 검색 API 를 그대로 쓰고 코드 자체를 질문으로 보낸다
+  const findSimilar = vscode.commands.registerCommand('codeMemory.findSimilar', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.selection.isEmpty) {
+      vscode.window.showWarningMessage('비교할 코드를 먼저 선택하세요.');
+      return;
+    }
+    // 줄바꿈·연속 공백은 한 칸으로, 너무 길면 앞부분만 (주소 길이 제한·모델 입력 제한)
+    const query = editor.document.getText(editor.selection).replace(/\s+/g, ' ').trim().slice(0, 1000);
+    if (!query) {
+      vscode.window.showWarningMessage('공백만 선택되었습니다.');
+      return;
+    }
+    await searchProvider.searchFor(query);
+  });
+  context.subscriptions.push(switchMode, findSimilar);
+
+  // 단축키(Ctrl+Alt+F) → 검색창에 커서
+  const focusCommand = vscode.commands.registerCommand('codeMemory.focusSearch', () => searchProvider.focusSearch());
+
+  context.subscriptions.push(command, focusCommand, output);
 }
 
 export function deactivate() {}
