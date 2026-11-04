@@ -70,3 +70,7 @@ def embed_query(query: str) -> list[float]:
 def embed_code(code: str) -> list[float]:
     """코드 원문을 정규화된 768차원 벡터로 변환한다."""
     return _embed(code, "passage: ")
+
+def warmup_model() -> None:
+    """모델을 로드하고 첫 임베딩 실행을 완료한다."""
+    embed_query("임베딩 모델 준비 확인")
