@@ -48,27 +48,131 @@ Extension은 위 7개 필드를 전송한다. 원본 파일의 절대 경로는 
 
 id, created_at, updated_at은 Database가 생성하므로 요청에 포함하지 않는다.
 
-### Success Response — HTTP 200
+### 처리 순서
+
+1. 요청의 7개 필드를 검증한다.
+2. 코드 원문과 메타데이터를 저장하고 커밋한다.
+3. 저장된 코드 원문으로 E5 임베딩을 생성한다.
+4. 같은 ID의 행에 벡터와 처리 상태를 저장한 뒤 응답한다.
+
+임베딩 생성은 원문 저장 트랜잭션 밖에서 수행한다.
+정상 저장 요청은 벡터 저장까지 기다린다.
+검색과 저장 과정에서 LLM은 호출하지 않는다.
+
+### 저장 및 검색 준비 완료 — HTTP 200
 
 ```json
 {
-  "id": 2,
-  "message": "snippet saved"
+  "id": 5,
+  "message": "snippet saved",
+  "embedding_status": "ready",
+  "embedding_error": null
 }
 ```
 
-id는 실제로 저장된 DB 행의 숫자 id이다. 예시의 2는 고정값이 아니다.
+ready는 해당 코드의 벡터 저장까지 완료됐다는 뜻이다.
+예시 ID는 고정값이 아니라 DB에서 생성한 실제 ID로 반환한다.
+
+### 원문 저장 완료, 임베딩 실패 — HTTP 200
+
+```json
+{
+  "id": 5,
+  "message": "snippet saved",
+  "embedding_status": "failed",
+  "embedding_error": "embedding_generation_failed"
+}
+```
+
+이 경우 원문과 메타데이터는 이미 저장되어 있다.
+같은 ID를 유지하고 벡터는 NULL, 상태는 failed로 기록한다.
+
+HTTP 200과 message는 원문 저장 완료를 뜻한다.
+Extension은 embedding_status를 확인해 검색 준비 결과를 별도로 안내한다.
+
+### 응답 필드
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| id | integer | 원문 저장이 확인된 실제 DB ID |
+| message | string | 원문 저장 완료 시 snippet saved |
+| embedding_status | string 또는 null | 완료 상태 ready 또는 failed. 상태 확인 불가 시 null |
+| embedding_error | string 또는 null | 안전한 실패 코드. ready이면 null |
+
+DB의 pending은 임베딩 미처리 상태다.
+pending만으로 백그라운드 작업이 실행 중이라고 판단하지 않는다.
+
+### 임베딩 실패 코드
+
+| 코드 | 의미 |
+|---|---|
+| embedding_input_invalid | 코드가 비었거나 E5 입력 한도를 초과함 |
+| embedding_generation_failed | 모델 준비 또는 벡터 생성 실패 |
+| embedding_storage_failed | 벡터 또는 처리 상태 저장 실패 |
+
+E5 입력 한도는 passage: 접두사와 특수 토큰을 포함해 512토큰이다.
+입력 한도 초과 시에도 원문을 보존하고 failed로 기록한다.
+같은 입력을 그대로 반복 재시도하지 않는다.
+
+서버 예외 문자열이나 DB 연결 비밀값을 응답에 포함하지 않는다.
+
+### 원문 저장 완료, 최종 상태 확인 불가 — HTTP 503
+
+원문 저장은 확인됐지만 DB 오류 등으로 벡터·실패 상태의
+최종 저장 결과를 확인할 수 없는 경우다.
+
+```json
+{
+  "id": 5,
+  "message": "snippet saved",
+  "embedding_status": null,
+  "embedding_error": "embedding_storage_failed"
+}
+```
+
+null은 API가 최종 상태를 확정하지 못했다는 뜻이며,
+DB에 새 상태 값을 추가하는 것이 아니다.
+
+Extension은 저장된 ID를 안내하고 검색 준비 완료로 표시하지 않는다.
+같은 POST를 다시 보내지 않고 해당 ID의 DB 상태부터 확인한다.
+
+벡터 갱신 결과가 0행이면 해당 ID와 원문의 상태를 다시 확인한다.
+ready 또는 failed를 확인할 수 없다면 위 응답으로 처리한다.
+
+### 원문 저장 확인 실패 — HTTP 503
+
+```json
+{
+  "detail": "Snippet storage unavailable"
+}
+```
+
+원문 저장 완료를 확인할 수 없는 경우다.
+저장되지 않았다고 단정하거나 자동으로 POST를 재전송하지 않는다.
+상세 원인은 서버 로그와 DB에서 확인한다.
 
 ### Request Validation Error — HTTP 422
 
-필수 필드 누락 또는 Pydantic이 해당 타입으로 처리할 수 없는 값은 요청 검증 오류를 반환한다. 현재 FastAPI의 기본 검증 오류 응답을 사용한다.
+필수 필드 누락 또는 Pydantic이 해당 타입으로 처리할 수 없는 값은
+기존 FastAPI 기본 검증 오류 응답을 반환한다.
+
+요청 검증을 통과한 뒤 발생한 임베딩 입력 오류는
+원문을 보존하고 embedding_input_invalid로 처리한다.
+
+### 시간 초과와 재처리
+
+- 응답 시간 초과만으로 원문 저장 실패를 단정하지 않는다.
+- 서버 로그와 DB를 확인하기 전에 같은 POST를 반복하지 않는다.
+- 재처리는 기존 ID·프로젝트·원문을 확인하고 같은 행을 갱신한다.
+- 이미 벡터가 있는 행은 덮어쓰지 않는다.
+- 재처리 성공 시 ready로 변경하고 embedding_error를 NULL로 지운다.
+- 원문·메타데이터·기존 ID를 유지한다.
 
 ### 현재 범위
 
-POST /snippets는 스니펫 저장만 수행한다.
-저장 직후 자동 Embedding 생성과 실패 재처리는 후속 단계다.
-검색은 아래 API 계약에 따라 사전에 벡터가 준비된 스니펫을 조회한다.
-
+이번 구현 범위는 스니펫 저장 후 자동 임베딩과 상태 반환이다.
+실제 연결과 완료 여부는 API·DB·Extension 통합 테스트로 확인한다.
+RAG 답변과 LLM 호출은 후속 단계에서 구현한다.
 ## 3. GET /search
 
 자연어 질문을 Embedding한 뒤 PostgreSQL에서 관련 스니펫을 검색한다.
