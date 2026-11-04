@@ -594,9 +594,9 @@ function getHtml(webview: vscode.Webview): string {
   .more { margin: 2px 0 0 28px; padding: 0; border: 0; background: none; font-size: 11px; color: var(--vscode-textLink-foreground); }
 
   /* D. 버튼은 평소 흐리게, 마우스·키보드로 고른 카드만 진하게 */
-  .acts { display: flex; gap: 2px; margin: 6px 0 0 24px; opacity: 0.55; transition: opacity 0.12s; }
+  .acts { display: flex; flex-wrap: wrap; gap: 2px; margin: 6px 0 0 24px; opacity: 0.55; transition: opacity 0.12s; }
   .card:hover .acts, .card:focus .acts, .card:focus-within .acts { opacity: 1; }
-  .acts button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; font-size: 12px; border: 0; border-radius: 3px;
+  .acts button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; font-size: 12px; border: 0; border-radius: 3px; white-space: nowrap;
                  color: var(--vscode-foreground); background: transparent; }
   .acts button:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
   .acts button:disabled { opacity: 0.4; background: transparent; }
@@ -1014,7 +1014,10 @@ function getHtml(webview: vscode.Webview): string {
     let text = '결과 ' + rows.length + '개';
     if (rows.length !== current.results.length) { text += ' · 전체 ' + current.results.length + '개 중'; }
     if (current.restored) { text = '지난 검색 · ' + text; }
+    // mock 결과는 검색어와 상관없는 샘플 — 좁은 화면에서도 보이게 짧게, 자세한 설명은 마우스 올리면
+    if (mode.mock) { text = (current.restored ? '지난 검색 · ' : '') + 'mock 샘플 ' + rows.length + '개'; }
     summary.textContent = text;
+    summary.title = mode.mock ? 'mock 모드라서 검색어와 상관없이 같은 샘플이 나옵니다' : '';
 
     if (!rows.length) {
       const s = el('div', 'state');
