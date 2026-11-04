@@ -1,9 +1,34 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from backend.routers.search import router as search_router
 from backend.routers.snippets import router as snippets_router
+from rag.embedding import warmup_model
 
-app = FastAPI(title="Capstone RAG API")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Preparing E5 model...", flush=True)
+
+    try:
+        warmup_model()
+    except Exception:
+        logger.exception("E5 warmup failed")
+    else:
+        print("E5 warmup: OK", flush=True)
+
+    yield
+
+
+app = FastAPI(
+    title="Capstone RAG API",
+    lifespan=lifespan,
+)
+
 app.include_router(snippets_router)
 app.include_router(search_router)
 
