@@ -10,17 +10,19 @@ VS Code에서 선택한 코드와 메타데이터를 PostgreSQL에 저장하고,
 | 코드·질문 Embedding | E5 기반 CPU 모듈, 정규화된 768차원 벡터 |
 | Semantic Search | 벡터가 준비된 행을 pgvector 코사인 거리로 검색 |
 | VS Code 검색 UI | 실제 API 결과, 점수, 원본 열기, 복사·삽입 확인 |
-| 새 저장 코드의 자동 Embedding·실패 재처리 | 후속 작업 |
-| 프로젝트·언어 검색 필터 | 후속 작업 |
+| 새 저장 코드의 자동 Embedding | 원문 커밋 후 E5 벡터·상태를 같은 행에 저장하고 응답 |
+| 실패 재처리 | 프로젝트·ID를 확인하는 CLI, 기존 원문·벡터 보호 |
+| 프로젝트·언어 필터 | UI 결과 필터 제공, Backend 검색 단계 필터는 후속 작업 |
 | RAG / Ask AI / Token Budget 최적화 | 후속 작업 |
 
-**현재 검색은 LLM을 호출하지 않는다.** 저장 직후 자동으로 벡터가 생기지는 않으며, 검색하려는 코드에 먼저 수동으로 Embedding을 준비해야 한다.
+**저장과 검색은 LLM을 호출하지 않는다.** 정상 저장은 자동 Embedding과 벡터 저장까지 기다린다. 원문 저장과 검색 준비 상태를 구분하며, 임베딩 실패 시 원문과 ID를 유지한다. 응답 필드는 [API 계약](API_CONTRACT.md)을 따른다.
 
 ## 현재 처리 흐름
 
 ```text
-저장: VS Code 코드 선택 → POST /snippets → PostgreSQL → 실제 id 반환
-벡터 준비: 저장된 code → 수동 E5 Embedding → 같은 행의 embedding에 저장
+저장: VS Code 코드 선택 → POST /snippets → 원문·메타데이터 커밋
+      → E5 코드 벡터 생성 → 같은 행의 벡터·상태 저장 → 실제 id와 상태 반환
+재처리: 프로젝트·ID 조회 → 명시적 --apply → 기존 행의 벡터·상태 갱신
 검색: 자연어 질문 → GET /search → E5 질문 벡터 → DB Top-K → VS Code 결과 목록
 ```
 
@@ -28,16 +30,18 @@ VS Code에서 선택한 코드와 메타데이터를 PostgreSQL에 저장하고,
 
 ## 실행과 개발 문서
 
-- [개발환경·DB·Backend·수동 Embedding 실행 가이드](docs/DEVELOPMENT.md)
+- [개발환경·DB·Backend·자동 Embedding 실행 가이드](docs/DEVELOPMENT.md)
+- [선택한 ID의 임베딩 재처리](rag/README.md)
 - [Extension 빌드와 사용 방법](extension/README.md)
 - [공식 API 계약](API_CONTRACT.md)
 - [역할 분담과 Git 작업 규칙](PROJECT_GUIDE.md)
-- [2026-10-28 통합 검증 기록](docs/INTEGRATION_TEST_2026-10-28.md)
+- [2026-11-05 자동 Embedding·Extension 통합 검증 기록](docs/INTEGRATION_TEST_2026-11-05.md)
+- [2026-10-28 Semantic Search 검증 기록](docs/INTEGRATION_TEST_2026-10-28.md)
 
 DB와 로컬 환경 변수 준비가 끝난 뒤, **Dev Container의 저장소 루트**에서 Backend를 실행한다.
 
 ```bash
-uv run --locked uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+uv run --locked uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 Windows 브라우저에서 [health](http://127.0.0.1:8000/health)와 [Swagger](http://127.0.0.1:8000/docs)를 확인한다. 포트 전달 주소가 다르면 VS Code 포트 탭에 표시된 주소를 사용한다.
