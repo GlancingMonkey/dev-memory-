@@ -73,7 +73,11 @@ async function searchSnippets(query: string): Promise<SearchResult[]> {
   try {
     res = await fetch(url, { signal: AbortSignal.timeout(10000) });
   } catch (err) {
-    // 서버 꺼짐 / 주소 틀림 / 10초 동안 응답 없음
+    // 시간 초과: 첫 검색은 모델 준비로 오래 걸릴 수 있다 → "고장"이 아니라 대기 안내
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error('응답 시간 초과 (10초). 첫 검색은 모델 준비로 오래 걸릴 수 있으니 잠시 후 다시 검색하세요.');
+    }
+    // 서버 꺼짐 / 주소 틀림
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`서버에 연결할 수 없습니다: ${baseUrl} (${reason})`);
   }

@@ -135,6 +135,9 @@ function collectSnippet(): Collected | null {
 // 4. 백엔드 전송 — POST /snippets
 //    mock 설정이 켜져 있으면 서버를 아예 호출하지 않는다 (가짜 응답).
 // ─────────────────────────────────────────────
+// 저장 요청 제한 시간. 첫 저장은 모델 준비로 오래 걸릴 수 있어 팀 합의(3쪽) 후 조정한다.
+const SAVE_TIMEOUT_MS = 10000;
+
 interface SaveResult {
   id: number;
   mock: boolean;      // true 면 실제 저장이 아니다
@@ -169,10 +172,16 @@ async function postSnippet(snippet: Snippet): Promise<SaveResult> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(SAVE_TIMEOUT_MS),
     });
   } catch (err) {
-    // 서버가 꺼져 있음 / 주소 틀림 / 10초 동안 응답 없음
+    // 시간 초과: 서버는 이미 저장했을 수 있다 → 다시 보내지 말고 확인부터 하게 안내
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error(
+        `응답 시간 초과 (${SAVE_TIMEOUT_MS / 1000}초). 서버에는 저장됐을 수 있으니 다시 누르지 말고 서버 로그·DB 를 먼저 확인하세요.`
+      );
+    }
+    // 서버가 꺼져 있음 / 주소 틀림
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`서버에 연결할 수 없습니다: ${url} (${reason})`);
   }
@@ -199,8 +208,16 @@ async function postSnippet(snippet: Snippet): Promise<SaveResult> {
 // ─────────────────────────────────────────────
 // 5. 확장 시작점 — package.json 의 명령·패널 ID 와 실제 동작을 연결
 // ─────────────────────────────────────────────
+// 저장 요청이 진행 중인지 — 기다리는 동안 또 눌러서 중복 저장되는 걸 막는다
+let saving = false;
+
 export function activate(context: vscode.ExtensionContext) {
   const command = vscode.commands.registerCommand('codeMemory.saveSnippet', async () => {
+    if (saving) {
+      vscode.window.showWarningMessage('이전 저장이 아직 진행 중입니다. 끝난 뒤 다시 시도하세요.');
+      return;
+    }
+
     const collected = collectSnippet();
     if (!collected) {
       return;
@@ -210,8 +227,12 @@ export function activate(context: vscode.ExtensionContext) {
     output.appendLine(`[${new Date().toLocaleTimeString()}] 보낼 스니펫 (원본: ${absolutePath})`);
     output.appendLine(JSON.stringify(snippet, null, 2));
 
+    saving = true;
     try {
-      const saved = await postSnippet(snippet);
+      const saved = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Code Memory: 저장 중…' },
+        () => postSnippet(snippet)
+      );
       const where = snippet.function_name ?? snippet.file_path;
       output.appendLine(`→ ${saved.detail}`);
 
@@ -226,6 +247,8 @@ export function activate(context: vscode.ExtensionContext) {
       const message = err instanceof Error ? err.message : String(err);
       output.appendLine(`→ 저장 실패: ${message}\n`);
       vscode.window.showErrorMessage(`저장 실패: ${message}`);
+    } finally {
+      saving = false;
     }
 
     output.show(true);
