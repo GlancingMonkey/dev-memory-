@@ -9,10 +9,10 @@ API 필드·응답은 [API_CONTRACT.md](../API_CONTRACT.md)를 우선한다. 이
 | 실행 위치 | 할 일 |
 |---|---|
 | Windows 로컬 | Docker Desktop, VS Code, Dev Containers 확장, Extension용 Node·npm |
-| Dev Container 저장소 루트 | uv 환경, Backend, DB 조회, 수동 Embedding |
+| Dev Container 저장소 루트 | uv 환경, Backend·자동 Embedding, DB 조회, 기존 ID 재처리 |
 | 확장 개발 호스트 | 테스트 프로젝트 열기, 실제 API 설정, 저장·검색 UI |
 
-실제 확인한 버전은 [2026-10-28 검증 기록](INTEGRATION_TEST_2026-10-28.md)에 있다. 경로 예시 `C:\dev\capstone-rag`는 본인의 저장소 경로로 바꾼다.
+현재 자동 저장 연결 결과는 [2026-11-05 검증 기록](INTEGRATION_TEST_2026-11-05.md), 이전 환경·검색 검증은 [2026-10-28 기록](INTEGRATION_TEST_2026-10-28.md)에 있다. 경로 예시 `C:\dev\capstone-rag`는 본인의 저장소 경로로 바꾼다.
 
 1. Docker Desktop을 실행한다.
 2. Windows VS Code에서 저장소 루트 폴더를 연다.
@@ -88,34 +88,62 @@ PY
 docker exec capstone-db psql -U capstone -d capstone -c "SELECT to_regclass('public.snippets');"
 ```
 
-- snippets가 없으면 init.sql을 적용한다.
-- 기존 snippets가 있으면 데이터를 유지한 채 migration으로 embedding 컬럼을 추가한다.
-
-```bash
-# snippets 테이블이 없는 경우에 적용
-docker exec -i capstone-db psql -U capstone -d capstone -v ON_ERROR_STOP=1 < database/init.sql
-
-# 기존 테이블에 embedding 컬럼이 없는 경우에 적용
-docker exec -i capstone-db psql -U capstone -d capstone -v ON_ERROR_STOP=1 < database/migrations/001_add_embedding.sql
-```
-
-위의 `< 파일` 입력은 Bash 문법이다. Windows PowerShell에 그대로 붙여넣지 않는다. SQL은 CREATE/ADD IF NOT EXISTS를 사용하며 기존 volume을 유지한다. 잘못된 기존 컬럼 타입을 자동으로 바꾸는 migration은 아니므로 실제 타입을 확인한다.
+먼저 현재 컬럼을 확인한다.
 
 ```bash
 docker exec capstone-db psql -U capstone -d capstone -c "\d public.snippets"
 ```
 
-정상 기준은 nullable `embedding vector(768)`과 기존 저장 필드·행이 유지되는 것이다. 실제 적용 전후 행 수와 원문·메타데이터도 대조한다.
+- snippets가 없으면 init.sql을 적용한다.
+- 기존 테이블에 embedding이 없으면 001 migration을 적용한다.
+- embedding은 있고 embedding_status·embedding_error가 모두 없으면 002 migration을 적용한다.
+- 필요한 컬럼이 이미 있으면 해당 migration을 건너뛴다. 상태 컬럼이 일부만 있거나 타입이 다르면 DB 담당자와 현재 구조부터 확인한다.
+
+기존 테이블에 embedding과 상태 컬럼이 모두 없으면 **001 적용 → 컬럼 재확인 → 002 적용** 순서로 진행한다. 현재 DB에 필요한 명령만 선택해 적용한다.
+
+snippets 테이블이 없는 경우:
+
+```bash
+docker exec -i capstone-db psql -U capstone -d capstone -v ON_ERROR_STOP=1 < database/init.sql
+```
+
+기존 테이블에 embedding 컬럼이 없는 경우:
+
+```bash
+docker exec -i capstone-db psql -U capstone -d capstone -v ON_ERROR_STOP=1 < database/migrations/001_add_embedding.sql
+```
+
+embedding이 있고 두 상태 컬럼이 모두 없는 경우:
+
+```bash
+docker exec -i capstone-db psql -U capstone -d capstone -v ON_ERROR_STOP=1 < database/migrations/002_add_embedding_status.sql
+```
+
+위의 `< 파일` 입력은 Bash 문법이다. Windows PowerShell에 그대로 붙여넣지 않는다. init/001은 IF NOT EXISTS를 사용하지만 002는 재실행용이 아니므로 이미 적용한 DB에 반복 실행하지 않는다. 기존 volume을 유지하고 실제 컬럼 타입을 확인한다.
+
+```bash
+docker exec capstone-db psql -U capstone -d capstone -c "\d public.snippets"
+```
+
+정상 기준은 nullable `embedding vector(768)`, NOT NULL/default pending인 `embedding_status`, nullable `embedding_error`다. 상태는 pending/ready/failed다. 기존 ID·원문·메타데이터·벡터가 유지되는지 적용 전후 대조한다.
 
 ## 4. Backend 실행과 상태 확인
 
 Dev Container의 저장소 루트에서 실행하고 터미널을 유지한다.
 
 ```bash
-uv run --locked uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+uv run --locked uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
-이미 같은 서버가 실행 중이면 그 서버를 사용한다. Windows 브라우저에서는 다음을 확인한다.
+최신 코드를 불러온 서버인지 확인하고 실행 터미널을 유지한다. 정상 준비 로그는 다음과 같다.
+
+```text
+E5 warmup: OK
+...
+Application startup complete.
+```
+
+warmup 실패가 있어도 서버 자체는 실행될 수 있으므로 두 로그를 함께 확인한다. Windows 브라우저에서는 다음을 확인한다.
 
 - [GET /health](http://127.0.0.1:8000/health): `{"status":"ok"}`
 - [Swagger](http://127.0.0.1:8000/docs): POST /snippets와 GET /search
@@ -154,6 +182,7 @@ Backend가 실행 중인 상태에서 Dev Container의 **다른 터미널**로 �
 ```bash
 uv run --locked python - <<'PY'
 import json
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 samples = [
@@ -179,79 +208,72 @@ for file_path, function_name, code in samples:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urlopen(request, timeout=30) as response:
-        result = json.load(response)
-        print(file_path, response.status, result)
+    try:
+        with urlopen(request, timeout=30) as response:
+            result = json.load(response)
+            print(file_path, response.status, result)
+            if result.get("embedding_status") != "ready":
+                raise SystemExit("Stop: check the saved ID and DB status before more requests")
+    except HTTPError as error:
+        print(file_path, error.code, error.read().decode("utf-8", errors="replace"))
+        raise SystemExit("Stop: inspect the response and DB before sending another POST")
 PY
 ```
 
-정상 응답은 HTTP 200과 실제 id·message다. **id를 고정값으로 가정하지 않고** 본인 환경의 응답을 기록한다. 폴더 이름을 다르게 정했다면 project_name도 그 이름으로 맞춘다.
+정상 응답은 HTTP 200, 실제 id, message=snippet saved, embedding_status=ready, embedding_error=null이다. failed이면 원문은 저장된 상태이므로 해당 ID와 실패 사유부터 확인한다. 응답 시간 초과나 503만으로 원문 저장 실패를 단정하거나 같은 POST를 반복하지 않는다. **id는 본인 환경의 실제 응답값**을 기록한다. 폴더 이름을 다르게 정했다면 project_name도 그 이름으로 맞춘다.
 
-## 6. 현재 방식의 수동 Embedding
+## 6. 자동 Embedding과 기존 ID 재처리
 
-현재 POST /snippets는 원문·메타데이터만 저장한다. 아래 단계로 벡터를 채워야 검색할 수 있다.
+POST /snippets는 원문·메타데이터를 먼저 커밋하고, 저장 트랜잭션 밖에서 E5 벡터를 생성한 뒤 같은 행의 벡터·상태를 저장한다. 정상 요청은 이 처리까지 기다려 ready로 응답한다.
 
 | 항목 | 현재 규칙 |
 |---|---|
 | 모델 | intfloat/multilingual-e5-base |
 | revision | d128750597153bb5987e10b1c3493a34e5a4502a |
 | 실행·출력 | CPU / FP32, 정규화된 768차원 벡터 |
-| 질문 입력 | embed_query가 query: 접두사와 끝 공백을 붙임 |
-| 코드 입력 | embed_code가 passage: 접두사와 끝 공백을 붙임 |
-| 길이 | 접두사와 특수 토큰을 포함해 최대 512토큰; 초과 입력 거절 |
+| 질문 입력 | embed_query가 `query: ` 접두사를 붙임 |
+| 코드 입력 | embed_code가 `passage: ` 접두사를 붙임 |
+| 길이 | 접두사·특수 토큰 포함 최대 512토큰; 초과 시 원문 보존 후 failed |
 | DB·검색 | nullable vector(768), 코사인 거리 <=> |
 
-[rag/embedding.py](../rag/embedding.py)가 접두사를 붙이므로 호출자는 원문을 전달한다. 첫 호출에서 모델 준비 시간이 발생할 수 있다.
+[rag/embedding.py](../rag/embedding.py)가 접두사를 붙이므로 호출자는 원문을 전달한다. 서버 시작 시 warmup을 수행하며 모델의 첫 다운로드·로드에는 추가 시간이 걸릴 수 있다.
 
-다음 코드는 **선택한 테스트 프로젝트의 embedding이 NULL인 행만** 처리한다. 실행 전에 project_name과 대상 행을 확인한다.
+### 응답에 따른 확인
 
-```bash
-uv run --locked python - <<'PY'
-from pgvector import Vector
-from pgvector.psycopg import register_vector
+- 200/ready: 원문과 벡터가 저장됐고 검색할 수 있다.
+- 200/failed: 원문과 ID는 보존돼 있다. 입력·생성·저장 실패 코드를 확인한다.
+- 503/저장된 ID와 status=null: 원문은 저장됐다. 해당 ID의 DB 최종 상태부터 확인한다.
+- 503/detail만 있음 또는 시간 초과: 원문 저장 여부가 확인되지 않았다. 서버 로그·DB 확인 전 같은 POST를 반복하지 않는다.
 
-from backend.database import connect_db
-from rag.embedding import EmbeddingInputError, embed_code
+pending은 미처리 상태이며 자동 백그라운드 실행을 뜻하지 않는다. 상태를 무시하고 벡터만 직접 채우는 대신 기존 ID 재처리 CLI를 사용한다.
 
-project_name = "mvp-save-test"
-with connect_db() as connection:
-    rows = connection.execute("""
-        SELECT id, code FROM public.snippets
-        WHERE project_name = %s AND embedding IS NULL
-        ORDER BY id
-    """, (project_name,)).fetchall()
+### 선택한 ID 먼저 조회
 
-print("대상 id:", [row[0] for row in rows])
-for snippet_id, code in rows:
-    try:
-        values = embed_code(code)
-    except EmbeddingInputError as error:
-        print(f"id={snippet_id}: 건너뜀 ({error})")
-        continue
-
-    with connect_db() as connection:
-        register_vector(connection)
-        updated = connection.execute("""
-            UPDATE public.snippets SET embedding = %s
-            WHERE id = %s AND code = %s AND embedding IS NULL
-        """, (Vector(values), snippet_id, code)).rowcount
-    print(f"id={snippet_id}: dimension={len(values)}, updated={updated}")
-PY
-```
-
-정상적으로 connection 문맥을 빠져나오면 커밋된다. 이미 벡터가 있는 행은 건너뛰고, 읽은 뒤 code가 달라진 행도 덮어쓰지 않는다. 재실행은 같은 모델·입력 규칙에서 빠진 벡터를 채우는 용도다. 모델이나 전처리를 바꾸는 경우의 재생성은 별도 합의한다.
-
-다시 조회한다.
+Dev Container Bash에서 실제 프로젝트와 ID를 입력한다. 아래 명령은 읽기 전용이다.
 
 ```bash
-docker exec capstone-db psql -U capstone -d capstone -c "SELECT id, function_name, vector_dims(embedding) AS dimension, vector_norm(embedding) AS norm FROM public.snippets WHERE project_name = 'mvp-save-test' ORDER BY id;"
+read -r -p "프로젝트 이름: " retry_project
+read -r -p "확인할 스니펫 ID: " retry_id
+uv run --locked python -m rag.retry_embeddings --project "$retry_project" --id "$retry_id"
 ```
 
-처리한 행은 dimension=768, norm 약 1이어야 한다. 원문·7개 필드가 그대로인지도 대조한다. 길이 초과 코드 등 처리에 실패한 행은 NULL로 남아 검색에서 제외된다. 같은 코드를 여러 번 저장한 행은 서로 다른 DB 행이며 현재 검색은 별도 중복 제거를 하지 않는다.
+대상 프로젝트·ID·원문이 원하는 행이고 재처리 가능한 상태인지 확인한다. 벡터가 있으면 건너뛰며, 입력 한도 초과의 failed/embedding_input_invalid도 같은 입력으로 다시 처리하지 않는다.
+
+### 확인한 ID에 적용
+
+앞서 확인한 같은 터미널의 프로젝트·ID로 적용한다.
+
+```bash
+uv run --locked python -m rag.retry_embeddings --project "$retry_project" --id "$retry_id" --apply
+```
+
+재처리는 새 INSERT를 만들지 않는다. 기존 ID·프로젝트·읽은 원문·NULL 벡터 조건을 확인하고, 성공하면 ready와 벡터를 저장하며 실패 사유를 지운다. 원문·메타데이터·기존 벡터를 보호한다. 자세한 종료 코드와 실패 처리 규칙은 [rag/README.md](../rag/README.md)를 따른다.
+
+같은 코드를 여러 번 저장한 행은 서로 다른 DB 행이며 검색 결과 중복 제거는 별도 후속 작업이다.
 
 ## 7. 실제 검색과 Extension 연결
 
-Windows Swagger의 GET /search에서 먼저 q와 limit을 입력한다. 모델의 첫 준비가 끝나면 Extension의 10초 요청 제한 때문에 첫 검색이 시간 초과되는 상황을 줄일 수 있다.
+Backend의 E5 warmup 성공과 검색할 행의 ready·벡터 저장을 확인한 뒤 Windows Swagger의 GET /search에서 q와 limit을 입력한다. 같은 질문을 Extension에서도 검색해 연결을 대조한다.
 
 | 질문 | 기대 함수 |
 |---|---|
@@ -269,7 +291,7 @@ limit 기본값은 10이고 1~20을 허용한다. 실제 DB 내용에 따라 id�
 
 API 직접 검색이 정상이라면 [Extension README](../extension/README.md)의 Windows 빌드·개발 호스트 실행·Mock=false 설정을 따른다. 같은 질문의 순서·코드·경로·줄 번호·점수를 API와 UI에서 비교한다.
 
-원본 열기로 실제 파일의 줄 범위를 확인하고, Save Snippet으로 저장한 id의 DB 행과 전송 원문을 대조하면 저장 회귀 확인까지 할 수 있다. 이 새 행도 벡터가 NULL인 상태로 저장되는 것이 현재 동작이다.
+원본 열기로 실제 파일의 줄 범위를 확인하고, 저장한 id의 DB 행과 전송 원문·메타데이터를 대조한다. 정상 새 저장은 ready·768차원·norm 약 1이며, 임베딩 실패 행은 failed·원문 보존·벡터 NULL인지 확인한다.
 
 ## 8. 종료와 오류 확인
 
@@ -280,10 +302,14 @@ Backend를 더 사용하지 않으면 실행 터미널에서 Ctrl+C로 종료한
 | DATABASE_URL is not configured | 저장소 루트 .env와 Backend 실행 환경 확인 |
 | DB 연결 실패 | DB 실행·health 상태, db/127.0.0.1 구분, 실제 로컬 접속 설정 확인 |
 | relation snippets does not exist | 3절의 테이블 존재 확인과 init.sql 적용 |
-| embedding 컬럼이 없음 | 기존 DB migration 적용 및 실제 타입 조회 |
-| 검색 결과가 없음 | 해당 DB에 벡터가 있는 행이 있는지, 수동 처리 실패가 있었는지 확인 |
+| embedding 또는 상태 컬럼이 없음 | 3절에서 실제 컬럼 확인 후 필요한 migration만 적용 |
+| 검색 결과가 없음 | 해당 DB의 ready 상태·벡터와 실패 사유 확인 |
+| 저장은 됐지만 검색 준비 실패 | 같은 POST를 반복하지 말고 기존 ID의 원문·상태와 재처리 조건 확인 |
+| 입력 한도 초과 | 원문과 ID 보존 확인 후 입력 분할 등 후속 방안 검토. 같은 입력 반복 재처리 중단 |
 | 첫 검색 시간 초과 | 모델 다운로드·로드가 끝났는지 Backend 로그와 Swagger로 확인 |
 | torch_dtype deprecated 경고 | 현재 고정 라이브러리에서 보인 경고다. 실제 예외·HTTP 실패 여부와 구분해 확인 |
 | Extension 원본 열기 실패 | 실제 로컬 파일, 열린 프로젝트 이름, 상대 경로 확인 |
 
 모델 비교 원본은 [기존 실험 폴더](../rag/experiments/embedding_compare/README.md)에 보존되어 있다. 추가 실행을 했다면 날짜·환경·SHA·실제 응답을 새 기록에 남긴다.
+
+[문서 목차](README.md) · [준비된 환경의 시연 순서](DEMO.md) · [자동·수동 테스트 안내](TESTING.md)

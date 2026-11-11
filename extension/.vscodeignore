@@ -13,3 +13,7 @@ vsc-extension-quickstart.md
 **/*.ts
 **/.vscode-test.*
 scripts/**
+# 패키지(.vsix)에 넣지 않을 것
+out/**
+*.vsix
+Claude outputs/**

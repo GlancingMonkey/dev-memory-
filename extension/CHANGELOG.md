@@ -1,9 +1,23 @@
 # Change Log
 
-All notable changes to the "code-memory" extension will be documented in this file.
-
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
-
 ## [Unreleased]
 
-- Initial release
+### 저장
+- 선택한 코드 + 메타데이터(프로젝트·상대 경로·언어·함수 이름·줄 번호)를 `POST /snippets` 계약 7개 필드로 전송
+- 선택 없이 커서만 두면 그 함수 전체 저장, 함수 이름은 VS Code 코드 구조로 추출 (못 받으면 정규식)
+- 저장 중 중복 실행 방지, 시간 초과 안내(자동 재전송 없음), 걸린 시간 기록, 제한 시간 설정
+- 확정된 저장 응답 ready / failed / null에 따라 원문 저장과 검색 준비를 구분
+- HTTP 503도 원문 저장이 확인된 ID를 알림·저장 기록에 유지
+- 시간 초과·원문 저장 확인 불가는 별도 경고로 안내하고 자동 재전송하지 않음
+- 과거 pending 기록을 임베딩 미처리로 표시
+- 저장 전 함수 이름 확인(설정), 저장 기록, 저장 알림의 "검색에서 확인"
+
+### 검색
+- 사이드바 자연어 검색 (`GET /search`), 순위·id·유사도·파일 위치·줄 번호·문법 색
+- 원본 열기 / 들여쓰기 맞춘 삽입 / 복사 / 비교, 원본 없음 미리 표시
+- 자세히·간단히 보기, 언어·프로젝트 필터, 결과 기록 복사, 최근 검색어, 지난 검색 복원
+- 비슷한 코드 찾기, 키보드 이동, Ctrl+Alt+F
+
+### 기타
+- 상태 표시줄 mock / 서버 연결 표시와 모드 전환
+- 시작하기 안내, 단위 테스트(`npm run test:unit`), `.vsix` 패키징(`npm run vsix`)

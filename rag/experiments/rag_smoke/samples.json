@@ -1,0 +1,81 @@
+{
+  "description": "11/11 RAG 첫 연결용 예시 5개. 실제 저장소 파일·DB 행·측정 결과가 아니다.",
+  "notes": [
+    "snippet은 저장 API의 7개 입력 필드 형식이다.",
+    "숫자 DB ID는 포함하지 않는다. 실제 저장 응답 ID와 로컬 원본 위치는 각 환경에서 기록한다.",
+    "DB 등록·임베딩은 기존 저장 흐름으로 별도 수행한다. 이 파일을 읽는 것만으로 등록되지 않는다.",
+    "expected_summary는 검토용 기대 동작이며 모델이 실제 답한 기록이 아니다."
+  ],
+  "cases": [
+    {
+      "sample_id": "add",
+      "question": "두 숫자를 더하는 함수는 어떤 값을 반환해?",
+      "expected_summary": "두 인수 a와 b의 합을 반환한다.",
+      "snippet": {
+        "project_name": "rag-smoke-1111",
+        "file_path": "add.py",
+        "language": "python",
+        "function_name": "add",
+        "start_line": 1,
+        "end_line": 2,
+        "code": "def add(a, b):\n    return a + b"
+      }
+    },
+    {
+      "sample_id": "even_numbers",
+      "question": "숫자 목록에서 짝수만 남기는 코드는 어떻게 동작해?",
+      "expected_summary": "입력 목록을 순회하며 2로 나눈 나머지가 0인 항목을 반환한다.",
+      "snippet": {
+        "project_name": "rag-smoke-1111",
+        "file_path": "even_numbers.py",
+        "language": "python",
+        "function_name": "even_numbers",
+        "start_line": 1,
+        "end_line": 2,
+        "code": "def even_numbers(values):\n    return [n for n in values if n % 2 == 0]"
+      }
+    },
+    {
+      "sample_id": "sort_users",
+      "question": "사용자 목록을 나이 오름차순으로 정렬하는 함수를 설명해줘.",
+      "expected_summary": "각 사용자 딕셔너리의 age 값을 정렬 기준으로 사용해 새 목록을 반환한다.",
+      "snippet": {
+        "project_name": "rag-smoke-1111",
+        "file_path": "sort_users.py",
+        "language": "python",
+        "function_name": "sort_users",
+        "start_line": 1,
+        "end_line": 2,
+        "code": "def sort_users(users):\n    return sorted(users, key=lambda user: user[\"age\"])"
+      }
+    },
+    {
+      "sample_id": "safe_divide",
+      "question": "0으로 나누려고 하면 이 나눗셈 함수는 어떻게 처리해?",
+      "expected_summary": "b가 0이면 None을 반환하고, 나머지는 a / b를 반환한다.",
+      "snippet": {
+        "project_name": "rag-smoke-1111",
+        "file_path": "safe_divide.py",
+        "language": "python",
+        "function_name": "safe_divide",
+        "start_line": 1,
+        "end_line": 4,
+        "code": "def safe_divide(a, b):\n    if b == 0:\n        return None\n    return a / b"
+      }
+    },
+    {
+      "sample_id": "multiply",
+      "question": "두 값을 곱하는 함수는 어떤 연산을 수행해?",
+      "expected_summary": "두 인수 a와 b의 곱을 반환한다.",
+      "snippet": {
+        "project_name": "rag-smoke-1111",
+        "file_path": "multiply.py",
+        "language": "python",
+        "function_name": "multiply",
+        "start_line": 1,
+        "end_line": 2,
+        "code": "def multiply(a, b):\n    return a * b"
+      }
+    }
+  ]
+}
