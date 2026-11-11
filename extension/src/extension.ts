@@ -226,8 +226,67 @@ async function postSnippet(snippet: Snippet): Promise<SaveResult> {
 // 저장 요청이 진행 중인지 — 기다리는 동안 또 눌러서 중복 저장되는 걸 막는다
 let saving = false;
 
+// 선택이 없으면 커서가 있는 함수 전체를 선택해 준다. 함수도 없으면 false
+async function selectFunctionAtCursor(editor: vscode.TextEditor): Promise<boolean> {
+  if (!editor.selection.isEmpty) {
+    return true;
+  }
+  const doc = editor.document;
+  const { fn } = pickSymbol(await getSymbols(doc), editor.selection.active.line);
+  if (!fn) {
+    return false;
+  }
+  const end = Math.min(fn.endLine, doc.lineCount - 1);
+  editor.selection = new vscode.Selection(fn.startLine, 0, end, doc.lineAt(end).text.length);
+  return true;
+}
+
+// ─────────────────────────────────────────────
+// 함수 위의 "💾 저장 | ✦ AI에게 묻기 | 🔍 비슷한 코드" (CodeLens). 설정 codeMemory.codeLens 로 끈다
+// ─────────────────────────────────────────────
+type LensAction = 'save' | 'ask' | 'similar';
+const LENS_COMMAND: Record<LensAction, string> = {
+  save: 'codeMemory.saveSnippet',
+  ask: 'codeMemory.askAboutSelection',
+  similar: 'codeMemory.findSimilar',
+};
+
+class FunctionLens implements vscode.CodeLensProvider {
+  private readonly changed = new vscode.EventEmitter<void>();
+  readonly onDidChangeCodeLenses = this.changed.event;
+  refresh(): void {
+    this.changed.fire();
+  }
+
+  async provideCodeLenses(doc: vscode.TextDocument): Promise<vscode.CodeLens[]> {
+    if (!vscode.workspace.getConfiguration('codeMemory').get<boolean>('codeLens', true)
+        || doc.uri.scheme !== 'file' || !vscode.workspace.getWorkspaceFolder(doc.uri)) {
+      return [];
+    }
+    const fns: SimpleSymbol[] = [];
+    const walk = (list: SimpleSymbol[]) => list.forEach((s) => {
+      if (s.kind === 'function') {
+        fns.push(s);
+      }
+      walk(s.children);
+    });
+    walk(await getSymbols(doc));
+    const lenses: vscode.CodeLens[] = [];
+    for (const fn of fns.slice(0, 300)) {
+      const range = new vscode.Range(fn.startLine, 0, fn.startLine, 0);
+      const args = (action: LensAction) => [doc.uri.toString(), fn.startLine, fn.endLine, action];
+      lenses.push(
+        new vscode.CodeLens(range, { title: '💾 저장', tooltip: `${fn.name} 함수를 Code Memory 에 저장`, command: 'codeMemory.runOnFunction', arguments: args('save') }),
+        new vscode.CodeLens(range, { title: '✦ AI에게 묻기', tooltip: `${fn.name} 함수에 대해 묻기 (검색창에 질문을 채움)`, command: 'codeMemory.runOnFunction', arguments: args('ask') }),
+        new vscode.CodeLens(range, { title: '🔍 비슷한 코드', tooltip: `${fn.name} 과 비슷한 저장 코드 찾기`, command: 'codeMemory.runOnFunction', arguments: args('similar') }),
+      );
+    }
+    return lenses;
+  }
+}
+
 export function activate(context: vscode.ExtensionContext) {
-  const searchProvider = new SearchViewProvider(context.workspaceState);
+  const searchProvider = new SearchViewProvider(context.workspaceState, context.globalState);
 
   const command = vscode.commands.registerCommand('codeMemory.saveSnippet', async () => {
     if (saving) {
@@ -356,20 +415,36 @@ export function activate(context: vscode.ExtensionContext) {
   status.command = 'codeMemory.switchMode';
   let healthSeq = 0;   // 확인 요청이 겹치면 마지막 것만 반영
 
+  // 오늘 AI 질문 수(✦ N)를 상태 표시줄 글자 뒤에, 토큰 합계를 툴팁에 붙인다 (실제 서버 모드만)
+  let baseText = '';
+  let baseTooltip = '';
+  const render = () => {
+    const mock = vscode.workspace.getConfiguration('codeMemory').get<boolean>('mock', true);
+    const u = searchProvider.usageToday();
+    const showUsage = !mock && u.count > 0;
+    status.text = baseText + (showUsage ? ` · ✦ ${u.count}` : '');
+    status.tooltip = baseTooltip + (mock ? '' : `\n\n오늘 AI 질문 ${u.count}번 · ${u.tokens.toLocaleString()} 토큰`
+      + '\n(저장된 답변 다시 보기는 0으로 셈 · 내 PC 기준, 자정에 초기화)');
+  };
+  const setStatus = (text: string, tooltip: string, bg?: vscode.ThemeColor) => {
+    baseText = text;
+    baseTooltip = tooltip;
+    status.backgroundColor = bg;
+    render();
+  };
+  context.subscriptions.push(searchProvider.onDidChangeUsage(render));
+
   const updateStatus = async () => {
     const config = vscode.workspace.getConfiguration('codeMemory');
     const seq = ++healthSeq;
     if (config.get<boolean>('mock', true)) {
-      status.text = '$(beaker) Code Memory: mock';
-      status.tooltip = 'mock 모드 — 서버를 호출하지 않습니다 (가짜 저장·샘플 검색). 눌러서 모드 바꾸기';
-      status.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+      setStatus('$(beaker) Code Memory: mock', 'mock 모드 — 서버를 호출하지 않습니다 (가짜 저장·샘플 검색). 눌러서 메뉴 (모드·기능·설정)',
+        new vscode.ThemeColor('statusBarItem.warningBackground'));
       return;
     }
     const apiUrl = config.get<string>('apiUrl', 'http://localhost:8000').replace(/\/+$/, '');
     const host = apiUrl.replace(/^https?:\/\//, '');
-    status.text = `$(sync~spin) Code Memory: ${host}`;
-    status.tooltip = `${apiUrl} 연결 확인 중…`;
-    status.backgroundColor = undefined;
+    setStatus(`$(sync~spin) Code Memory: ${host}`, `${apiUrl} 연결 확인 중…`);
 
     let ok = false;
     let reason = '';
@@ -384,13 +459,12 @@ export function activate(context: vscode.ExtensionContext) {
       return;   // 그 사이 설정이 바뀌었으면 이 결과는 버린다
     }
     if (ok) {
-      status.text = `$(pass-filled) Code Memory: ${host}`;
-      status.tooltip = `실제 서버 ${apiUrl} 연결됨 (/health 응답 정상 — DB 저장 성공까지 뜻하지는 않음). 눌러서 모드 바꾸기`;
-      status.backgroundColor = undefined;
+      setStatus(`$(pass-filled) Code Memory: ${host}`,
+        `실제 서버 ${apiUrl} 연결됨 (/health 응답 정상 — DB 저장 성공까지 뜻하지는 않음). 눌러서 메뉴 (모드·기능·설정)`);
     } else {
-      status.text = `$(error) Code Memory: ${host} 연결 안 됨`;
-      status.tooltip = `${apiUrl}/health 확인 실패 (${reason}). 서버 실행·주소·포트 전달을 확인하세요. 눌러서 모드 바꾸기`;
-      status.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+      setStatus(`$(error) Code Memory: ${host} 연결 안 됨`,
+        `${apiUrl}/health 확인 실패 (${reason}). 서버 실행·주소·포트 전달을 확인하세요. 눌러서 메뉴 (모드·기능·설정)`,
+        new vscode.ThemeColor('statusBarItem.errorBackground'));
     }
   };
 
@@ -422,15 +496,26 @@ export function activate(context: vscode.ExtensionContext) {
         ? vscode.ConfigurationTarget.Workspace
         : vscode.ConfigurationTarget.Global;
 
-    type Item = vscode.QuickPickItem & { id: 'mock' | 'real' | 'url' | 'health' | 'settings' };
+    type Id = 'mock' | 'real' | 'url' | 'health' | 'settings' | 'search' | 'save' | 'ask' | 'feedback' | 'walkthrough' | 'sep';
+    type Item = vscode.QuickPickItem & { id: Id };
+    const sep = (label: string): Item => ({ id: 'sep', label, kind: vscode.QuickPickItemKind.Separator });
+    const fb = searchProvider.feedbackCounts();
     const items: Item[] = [
+      sep('모드'),
       { id: 'mock', label: '$(beaker) mock', description: mock ? '현재' : '', detail: '서버를 호출하지 않음 — 가짜 저장, 샘플 검색' },
       { id: 'real', label: '$(plug) 실제 서버', description: mock ? '' : '현재', detail: apiUrl },
+      sep('기능'),
+      { id: 'search', label: '$(search) 검색창 열기', description: 'Ctrl+Alt+F' },
+      { id: 'save', label: '$(save) 코드 저장', description: 'Ctrl+Alt+S · 선택 또는 커서가 있는 함수' },
+      { id: 'ask', label: '$(sparkle) 이 코드에 대해 묻기', description: 'Ctrl+Alt+A · 선택 또는 커서가 있는 함수' },
+      { id: 'feedback', label: '$(export) AI 피드백 내보내기', description: `👍 ${fb.up} · 👎 ${fb.down}` },
+      { id: 'walkthrough', label: '$(question) 시작하기 안내' },
+      sep('설정'),
       { id: 'url', label: '$(edit) 서버 주소 바꾸기…' },
       { id: 'health', label: '$(refresh) 연결 다시 확인' },
       { id: 'settings', label: '$(gear) 설정 열기' },
     ];
-    const pick = await vscode.window.showQuickPick(items, { title: 'Code Memory 모드' });
+    const pick = await vscode.window.showQuickPick(items, { title: 'Code Memory', placeHolder: '고르거나 입력해서 찾기' });
     if (!pick) {
       return;
     }
@@ -459,14 +544,29 @@ export function activate(context: vscode.ExtensionContext) {
       case 'settings':
         await vscode.commands.executeCommand('workbench.action.openSettings', 'codeMemory');
         break;
+      case 'search':
+        await vscode.commands.executeCommand('codeMemory.focusSearch');
+        break;
+      case 'save':
+        await vscode.commands.executeCommand('codeMemory.saveSnippet');
+        break;
+      case 'ask':
+        await vscode.commands.executeCommand('codeMemory.askAboutSelection');
+        break;
+      case 'feedback':
+        await searchProvider.exportFeedback();
+        break;
+      case 'walkthrough':
+        await vscode.commands.executeCommand('codeMemory.openWalkthrough');
+        break;
     }
   });
 
   // 선택한 코드로 비슷한 코드 찾기 (우클릭 메뉴) — 기존 검색 API 를 그대로 쓰고 코드 자체를 질문으로 보낸다
   const findSimilar = vscode.commands.registerCommand('codeMemory.findSimilar', async () => {
     const editor = vscode.window.activeTextEditor;
-    if (!editor || editor.selection.isEmpty) {
-      vscode.window.showWarningMessage('비교할 코드를 먼저 선택하세요.');
+    if (!editor || !(await selectFunctionAtCursor(editor))) {
+      vscode.window.showWarningMessage('찾을 코드를 선택하거나 함수 안에 커서를 두세요.');
       return;
     }
     // 줄바꿈·연속 공백은 한 칸으로, 너무 길면 앞부분만 (주소 길이 제한·모델 입력 제한)
@@ -479,6 +579,48 @@ export function activate(context: vscode.ExtensionContext) {
     searchProvider.setCompareSource(editor.document.getText(editor.selection), editor.document.languageId);
     await searchProvider.searchFor(query);
   });
+
+  // 선택한 코드로 묻기 (우클릭 메뉴) — 사이드바 검색창에 "add 함수 어떻게 동작해 ?" 를 채운다. 보내는 건 사용자가 Enter
+  const askAboutSelection = vscode.commands.registerCommand('codeMemory.askAboutSelection', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || !(await selectFunctionAtCursor(editor))) {
+      vscode.window.showWarningMessage('물어볼 코드를 선택하거나 함수 안에 커서를 두세요.');
+      return;
+    }
+    const doc = editor.document;
+    const line = editor.selection.start.line;
+    const symbols = await getSymbols(doc);
+    const picked = pickSymbol(symbols, line);
+    const name = symbols.length
+      ? (picked.fn?.name ?? picked.cls?.name ?? null)
+      : findFunctionNameByRegex((i) => doc.lineAt(i).text, doc.languageId, line);
+    const lead = name ? `${name} 함수 ` : '선택한 코드 ';
+    const tail = name ? '어떻게 동작해' : '설명해줘';
+    // "어떻게 동작해" 부분을 선택해 둬서 바로 고쳐 쓸 수 있게
+    await searchProvider.prefillAsk(`${lead}${tail} ?`, lead.length, lead.length + tail.length);
+  });
+  const exportFeedback = vscode.commands.registerCommand('codeMemory.exportFeedback', () => searchProvider.exportFeedback());
+  context.subscriptions.push(askAboutSelection, exportFeedback);
+
+  // 함수 위 글자(CodeLens) → 그 함수를 선택하고 원래 명령 실행
+  const lens = new FunctionLens();
+  const runOnFunction = vscode.commands.registerCommand('codeMemory.runOnFunction',
+    async (uri: string, start: number, end: number, action: LensAction) => {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
+      const editor = await vscode.window.showTextDocument(doc, { preview: false });
+      const last = Math.min(end, doc.lineCount - 1);
+      editor.selection = new vscode.Selection(start, 0, last, doc.lineAt(last).text.length);
+      await vscode.commands.executeCommand(LENS_COMMAND[action]);
+    });
+  context.subscriptions.push(
+    runOnFunction,
+    vscode.languages.registerCodeLensProvider({ scheme: 'file' }, lens),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('codeMemory.codeLens')) {
+        lens.refresh();
+      }
+    }),
+  );
 
   // 시작하기 안내 (VS Code 시작 화면의 단계별 안내)
   const walkthrough = vscode.commands.registerCommand('codeMemory.openWalkthrough', () =>
