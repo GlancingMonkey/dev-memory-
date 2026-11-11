@@ -257,3 +257,100 @@ RAG 답변과 LLM 호출은 후속 단계에서 구현한다.
 ```
 
 상세 원인은 서버 로그에 기록하고 연결 비밀값을 응답에 포함하지 않는다.
+
+## 4. POST /ask
+
+기존 E5 질문 임베딩과 DB 검색 결과를 사용해 저장된 코드에 근거한 단일 답변을 만든다. 이 API만 답변 생성용 LLM을 호출한다. POST /snippets와 GET /search는 계속 LLM을 호출하지 않는다.
+
+### Request
+
+Content-Type: application/json
+
+```json
+{
+  "q": "두 숫자를 더하는 함수가 어떻게 동작하는지 설명해줘.",
+  "limit": 10
+}
+```
+
+| 필드 | 타입 | 필수 여부 | 기본값 | 설명 |
+|---|---|---|---|---|
+| q | string | 필수 | 없음 | 앞뒤 공백 제거 후 질문. 기존 E5 질문 입력 한도(접두사와 특수 토큰 포함 512토큰)를 적용한다. |
+| limit | integer | 선택 | 10 | DB 검색 후보 최대 개수. 1~20. LLM Context에 포함할 코드 개수와는 다르다. |
+
+첫 연결은 전체 DB에서 후보를 검색한다. 프로젝트·언어 필터는 별도 합의 전까지 적용하지 않는다. Extension은 요청에 코드 원문, 파일 절대 경로, 벡터, 모델 선택 또는 API 키를 포함하지 않는다. Backend는 API 키를 Backend의 `.env` 또는 환경변수에서만 읽는다. 키 환경변수명은 LLM 클라이언트 도입 시 확정한다. 사용자 키 입력 UI와 키 전달 API는 이 범위에 포함하지 않는다.
+
+### 답변 완료 — HTTP 200
+
+아래 ID·점수·사용량은 응답 형식 예시이며 실제 DB/API 측정값이 아니다.
+
+```json
+{
+  "status": "answered",
+  "answer": "add는 입력받은 두 값 a와 b의 합을 반환합니다. [S1]",
+  "sources": [
+    {
+      "citation_id": "S1",
+      "id": 1,
+      "project_name": "mvp-save-test",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "add",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def add(a, b):\\n    return a + b",
+      "score": 0.8
+    }
+  ],
+  "model": "gpt-6.1-sol",
+  "usage": {
+    "input_tokens": 1500,
+    "output_tokens": 200,
+    "total_tokens": 1700
+  }
+}
+```
+
+`status`는 `answered` 또는 `insufficient_context`다. `answer`는 단일 문자열이며 코드에 관한 주장은 `[S1]` 형식으로 출처를 표시한다. `sources`는 실제 Context에 포함되고 답변이 인용한 출처만 담는다. 각 항목은 요청 안에서만 쓰는 `citation_id`와 DB 검색 결과의 실제 ID, 기존 저장 필드 7개, `score`를 포함한다. 출처 메타데이터와 원문은 DB 검색 결과에서 조립하며 모델이 만든 경로·줄 번호·코드로 대체하지 않는다. `model`은 호출이 완료됐을 때 제공자가 반환한 실제 모델명이고, `usage`는 제공자가 반환한 실제 `input_tokens`, `output_tokens`, `total_tokens`다. 호출하지 않았을 때 둘 다 `null`이다.
+
+Backend는 모델 응답의 구조, 답변의 비어 있지 않음, 인용 ID와 답변의 인용 표기, 실제로 Context에 전달된 ID인지 검증한다. 알 수 없는 ID, 인용 목록 불일치, 잘못된 형식 또는 미완료 응답은 정상 답변으로 반환하지 않는다. 구조·ID 검증은 답변 주장이 코드와 사실상 일치하는지를 보장하지 않는다.
+
+### 참고 자료 부족 — HTTP 200
+
+검색 후보가 없거나 제한 예산 안에 완전한 스니펫을 하나도 넣을 수 없으면 생성 호출 없이 다음 응답을 반환한다.
+
+```json
+{
+  "status": "insufficient_context",
+  "answer": "저장된 코드만으로는 질문에 답할 근거가 부족합니다. 검색 조건이나 질문을 바꿔 주세요.",
+  "sources": [],
+  "model": null,
+  "usage": null
+}
+```
+
+모델 호출 후 근거 부족으로 판단된 경우에도 `status`는 `insufficient_context`지만, `model`과 `usage`에는 실제 호출 결과를 담는다. 관련성 점수 기준으로 결과를 제거하지 않으며, 모델·DB 장애를 근거 부족으로 숨기지 않는다.
+
+### 오류
+
+| HTTP | 상황 | 응답 코드 |
+|---|---|---|
+| 422 | 질문 누락·공백·E5 입력 한도 초과 또는 잘못된 `limit` | FastAPI 기본 검증 오류 또는 detail 문자열 |
+| 503 | E5·DB·LLM 설정 또는 연결을 사용할 수 없음 | `ask_service_unavailable` |
+| 504 | 서버 처리 시간 제한 초과 | `ask_timeout` |
+| 502 | 잘못된 응답·인용 ID, 생성 불가 또는 출력 한도로 미완료 | `llm_response_invalid` |
+
+오류 detail 객체는 `{"code":"ask_service_unavailable","message":"AI 질문을 처리할 수 없습니다. 잠시 후 다시 시도해 주세요."}` 형식이다. 코드는 위 표의 상황에 맞게 설정한다. 제공자 예외 문자열, API 키 및 연결 비밀값을 응답이나 로그에 포함하지 않는다. 시간 초과 후 자동 재시도·재전송하지 않는다. 시간 초과는 제공자 측 생성이나 과금 여부를 확정하지 않는다.
+
+### 최초 검증용 제한 및 호출 정책
+
+| 항목 | 초기값 |
+|---|---|
+| 답변 모델 | `gpt-6.1-sol`, reasoning effort `low` |
+| Context 예산 | 4,000토큰 |
+| 전체 입력 상한 | 8,000토큰(질문·지시문·Context·메시지 구조·스키마 포함) |
+| 최대 출력 | 4,096토큰(비가시 토큰 포함) |
+| 서버 처리 제한 | 30초 |
+| 생성 요청 횟수 | 요청당 1회, 자동 재시도 없음 |
+
+이 값은 최초 검증용 제한이며 실측값이 아니다. Context는 검색 순서대로 완전한 스니펫 단위로 구성하고 코드 중간을 잘라 넣지 않는다. Context 예산과 전체 입력 상한은 실제 LLM 입력 계수 방법으로 검증하며 E5의 512토큰 제한이나 문자 수를 LLM 사용량으로 간주하지 않는다.
