@@ -269,7 +269,11 @@ Content-Type: application/json
 ```json
 {
   "q": "두 숫자를 더하는 함수가 어떻게 동작하는지 설명해줘.",
-  "limit": 10
+  "limit": 10,
+  "history": [
+    {"q": "앞서 본 add 함수는 어디에 쓰여?", "answer": "두 값을 더합니다. [S1]"}
+  ],
+  "stream": true
 }
 ```
 
@@ -277,6 +281,8 @@ Content-Type: application/json
 |---|---|---|---|---|
 | q | string | 필수 | 없음 | 앞뒤 공백 제거 후 질문. 기존 E5 질문 입력 한도(접두사와 특수 토큰 포함 512토큰)를 적용한다. |
 | limit | integer | 선택 | 10 | DB 검색 후보 최대 개수. 1~20. LLM Context에 포함할 코드 개수와는 다르다. |
+| history | array | 선택 | `[]` | 이어서 묻기 위한 이전 질문·답변. 최대 2턴. 각 답변은 최대 1,500자이며 입력 토큰 상한에 포함한다. 이전 답변은 질문의 문맥으로만 사용하고 코드 사실의 근거로 삼지 않는다. |
+| stream | boolean | 선택 | `false` | `true`이면 SSE로 답변 조각을 전송한다. 생략·`false`이면 일반 JSON으로 한 번 응답한다. |
 
 첫 연결은 전체 DB에서 후보를 검색한다. 프로젝트·언어 필터는 별도 합의 전까지 적용하지 않는다. Extension은 요청에 코드 원문, 파일 절대 경로, 벡터, 모델 선택 또는 API 키를 포함하지 않는다. Backend는 API 키를 Backend의 `.env` 또는 환경변수에서만 읽는다. 키 환경변수명은 LLM 클라이언트 도입 시 확정한다. 사용자 키 입력 UI와 키 전달 API는 이 범위에 포함하지 않는다.
 
@@ -307,11 +313,29 @@ Content-Type: application/json
     "input_tokens": 1500,
     "output_tokens": 200,
     "total_tokens": 1700
-  }
+  },
+  "history_used": 1
 }
 ```
 
-`status`는 `answered` 또는 `insufficient_context`다. `answer`는 단일 문자열이며 코드에 관한 주장은 `[S1]` 형식으로 출처를 표시한다. `sources`는 실제 Context에 포함되고 답변이 인용한 출처만 담는다. 각 항목은 요청 안에서만 쓰는 `citation_id`와 DB 검색 결과의 실제 ID, 기존 저장 필드 7개, `score`를 포함한다. 출처 메타데이터와 원문은 DB 검색 결과에서 조립하며 모델이 만든 경로·줄 번호·코드로 대체하지 않는다. `model`은 호출이 완료됐을 때 제공자가 반환한 실제 모델명이고, `usage`는 제공자가 반환한 실제 `input_tokens`, `output_tokens`, `total_tokens`다. 호출하지 않았을 때 둘 다 `null`이다.
+`status`는 `answered` 또는 `insufficient_context`다. `answer`는 단일 문자열이며 코드에 관한 주장은 `[S1]` 형식으로 출처를 표시한다. `sources`는 실제 Context에 포함되고 답변이 인용한 출처만 담는다. 각 항목은 요청 안에서만 쓰는 `citation_id`와 DB 검색 결과의 실제 ID, 기존 저장 필드 7개, `score`를 포함한다. 출처 메타데이터와 원문은 DB 검색 결과에서 조립하며 모델이 만든 경로·줄 번호·코드로 대체하지 않는다. `model`은 호출이 완료됐을 때 제공자가 반환한 실제 모델명이고, `usage`는 제공자가 반환한 실제 `input_tokens`, `output_tokens`, `total_tokens`다. `history_used`는 실제 요청에 반영한 이전 대화 턴 수이며 0 이상이다. 호출하지 않았을 때 model과 usage는 `null`이다.
+
+### SSE 스트리밍
+
+`stream: true`이면 `Content-Type: text/event-stream`으로 다음 순서의 이벤트를 보낸다. 각 `data`는 JSON이다.
+
+```text
+event: sources
+data: {"sources":[...선택한 DB 출처...]}
+
+event: delta
+data: {"text":"답변 조각"}
+
+event: done
+data: {...HTTP 200의 최종 응답과 같은 객체...}
+```
+
+`delta`는 여러 번 올 수 있다. `sources`는 화면 미리 보기용으로 선택한 전체 참고 자료를 담고, `done`의 sources는 최종 답변이 인용한 자료만 담는다. `done` 없이 스트림이 끝나면 완료된 답변이 아니다. 스트리밍 중 오류는 `event: error`와 `{"status":503,"detail":"안전한 안내문"}` 형식으로 보낸다. 검색·입력 검증처럼 스트림을 열기 전에 생긴 오류는 일반 HTTP 오류 응답으로 반환한다. 클라이언트 취소는 서버 생성이 중단됐거나 과금되지 않았다는 보장이 아니다.
 
 Backend는 모델 응답의 구조, 답변의 비어 있지 않음, 인용 ID와 답변의 인용 표기, 실제로 Context에 전달된 ID인지 검증한다. 알 수 없는 ID, 인용 목록 불일치, 잘못된 형식 또는 미완료 응답은 정상 답변으로 반환하지 않는다. 구조·ID 검증은 답변 주장이 코드와 사실상 일치하는지를 보장하지 않는다.
 
@@ -325,7 +349,8 @@ Backend는 모델 응답의 구조, 답변의 비어 있지 않음, 인용 ID와
   "answer": "저장된 코드만으로는 질문에 답할 근거가 부족합니다. 검색 조건이나 질문을 바꿔 주세요.",
   "sources": [],
   "model": null,
-  "usage": null
+  "usage": null,
+  "history_used": 0
 }
 ```
 

@@ -214,6 +214,19 @@ class RagContextTests(unittest.TestCase):
                     build_rag_messages(question, context)
         self.assertEqual(render_context(()), "")
 
+    def test_follow_up_history_is_untrusted_user_context(self):
+        context = build_context(
+            [snippet()], count_tokens=synthetic_count({17: 1}),
+        )
+        history = [{"q": "앞 질문", "answer": "앞 답변"}]
+        messages = build_rag_messages("이어서 설명해줘", context, history=history)
+
+        self.assertEqual(messages[0]["content"], RAG_INSTRUCTIONS)
+        self.assertNotIn("앞 답변", messages[0]["content"])
+        user_payload = json.loads(messages[1]["content"])
+        self.assertEqual(user_payload["question"], "이어서 설명해줘")
+        self.assertEqual(user_payload["history"], history)
+
 
 if __name__ == "__main__":
     unittest.main()

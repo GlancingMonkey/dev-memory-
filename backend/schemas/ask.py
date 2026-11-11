@@ -5,9 +5,16 @@ from pydantic import BaseModel, Field
 from backend.schemas.search import SearchResult
 
 
+class AskHistoryTurn(BaseModel):
+    q: str = Field(min_length=1, max_length=4_000)
+    answer: str = Field(min_length=1, max_length=1_500)
+
+
 class AskRequest(BaseModel):
     q: str = Field(min_length=1)
     limit: int = Field(default=10, ge=1, le=20)
+    stream: bool = False
+    history: list[AskHistoryTurn] = Field(default_factory=list, max_length=2)
 
 
 class AskUsage(BaseModel):
@@ -26,3 +33,4 @@ class AskResponse(BaseModel):
     sources: list[AskSource]
     model: str | None
     usage: AskUsage | None
+    history_used: int = Field(ge=0)
