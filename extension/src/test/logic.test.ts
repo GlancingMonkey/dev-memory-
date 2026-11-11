@@ -1,7 +1,7 @@
 // logic.ts 단위 테스트 — VS Code 없이 돌아간다: npm run test:unit
 import * as assert from 'assert';
 import {
-  adjustEndLine, clamp, findFunctionNameByRegex, formatSeconds, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
+  addUsage, adjustEndLine, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
 } from '../logic';
 
 const linesOf = (src: string) => {
@@ -176,5 +176,142 @@ suite('기타', () => {
     assert.strictEqual(clamp(0, 1, 20, 10), 1);
     assert.strictEqual(clamp(undefined, 1, 20, 10), 10);
     assert.strictEqual(clamp(7.6, 1, 20, 10), 8);
+  });
+});
+
+suite('AI 질문 — extractCitations / parseAskResponse (POST /ask 제안안)', () => {
+  const source = (citation_id: string, id = 1) => ({
+    citation_id, id, project_name: 'mvp-save-test', file_path: 'sample.py', language: 'python',
+    function_name: 'add', start_line: 1, end_line: 2, code: 'def add(a, b):\n    return a + b', score: 0.84,
+  });
+  const reply = (over: Record<string, unknown> = {}) => JSON.stringify({
+    status: 'answered', answer: 'add 함수입니다 [S1]. 합을 반환합니다 [S1].', sources: [source('S1')],
+    model: 'gpt-6.1-sol', usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 }, ...over,
+  });
+
+  test('인용은 나온 순서대로, 같은 건 한 번만', () => {
+    assert.deepStrictEqual(extractCitations('a [S2] b [S1] c [S2] [X1] [S]'), ['S2', 'S1']);
+  });
+
+  test('정상 답변 — 출처·모델·사용량 그대로', () => {
+    const r = parseAskResponse(reply());
+    assert.strictEqual(r.status, 'answered');
+    assert.deepStrictEqual(r.citations, ['S1']);
+    assert.deepStrictEqual(r.unknownCitations, []);
+    assert.strictEqual(r.sources[0].id, 1);
+    assert.deepStrictEqual(r.usage, { input_tokens: 100, output_tokens: 20, total_tokens: 120 });
+  });
+
+  test('답변에 있지만 sources 에 없는 인용은 따로 표시', () => {
+    assert.deepStrictEqual(parseAskResponse(reply({ answer: '[S1] 그리고 [S3]' })).unknownCitations, ['S3']);
+  });
+
+  test('근거 부족 — 빈 답변·빈 출처·LLM 미호출 허용', () => {
+    const r = parseAskResponse(JSON.stringify({ status: 'insufficient_context', answer: null, sources: [], model: null, usage: null }));
+    assert.strictEqual(r.status, 'insufficient_context');
+    assert.strictEqual(r.answer, '');
+    assert.strictEqual(r.usage, null);
+  });
+
+  test('계약과 다른 모양은 format 오류 — 성공으로 표시하지 않음', () => {
+    const kind = (text: string) => {
+      try { parseAskResponse(text); return 'ok'; } catch (e) { return e instanceof AskError ? e.kind : 'other'; }
+    };
+    assert.strictEqual(kind('<html>'), 'format');
+    assert.strictEqual(kind(reply({ status: 'done' })), 'format');
+    assert.strictEqual(kind(reply({ answer: '  ' })), 'format');
+    assert.strictEqual(kind(reply({ sources: [{ ...source('S1'), citation_id: '1' }] })), 'format');
+    assert.strictEqual(kind(reply({ sources: [{ ...source('S1'), id: 0 }] })), 'format');
+    assert.strictEqual(kind(reply({ sources: [{ ...source('S1'), start_line: 3, end_line: 2 }] })), 'format');
+    assert.strictEqual(kind(reply({ sources: [source('S1'), source('S1', 2)] })), 'format');
+    assert.strictEqual(kind(reply({ usage: { input_tokens: 1 } })), 'format');
+  });
+
+  test('HTTP 오류 구분 — 422 / 502 / 503 / 504 / 그 밖', () => {
+    const kindOf = (status: number) => {
+      try { parseAskResponse('{"detail":"x"}', status); return 'ok'; } catch (e) { return e instanceof AskError ? e.kind : 'other'; }
+    };
+    assert.strictEqual(kindOf(422), 'input');
+    assert.strictEqual(kindOf(502), 'bad_answer');
+    assert.strictEqual(kindOf(503), 'unavailable');
+    assert.strictEqual(kindOf(504), 'timeout');
+    assert.strictEqual(kindOf(500), 'server');
+    assert.strictEqual(askErrorFor(503, '').detail.length > 0, true);
+  });
+});
+
+suite('검색 / AI 질문 구분 — 규칙만, LLM 없음', () => {
+  test('끝에 ? 가 있으면 AI 질문 (전각·뒤 공백 포함)', () => {
+    assert.strictEqual(endsWithQuestionMark('add 함수는 뭘 반환해?'), true);
+    assert.strictEqual(endsWithQuestionMark('정렬 차이가 뭐야？  '), true);
+  });
+  test('중간에 ? 가 있어도 끝이 아니면 검색 — 삼항·옵셔널 체이닝', () => {
+    assert.strictEqual(endsWithQuestionMark('a ? b : c 삼항 연산자 쓰는 코드'), false);
+    assert.strictEqual(endsWithQuestionMark('optional chaining ?. 쓰는 부분'), false);
+    assert.strictEqual(endsWithQuestionMark('정렬 함수'), false);
+  });
+  test('질문처럼 생긴 문장 → 제안 대상', () => {
+    for (const q of ['두 숫자 더하는 함수 동작 설명해줘', '이 코드 왜 None 을 반환해', '정렬 두 개 차이', 'how does add work']) {
+      assert.strictEqual(looksLikeQuestion(q), true, q);
+    }
+  });
+  test('평범한 검색어 → 제안 안 함', () => {
+    for (const q of ['정렬 함수', '두 숫자를 더하는 함수', '리스트에서 짝수만 고르기', 'sort users by age', '']) {
+      assert.strictEqual(looksLikeQuestion(q), false, q);
+    }
+  });
+});
+
+suite('AI 질문 부가 기능 — 이어서 묻기 · 한 글자씩 · 저장된 답변 · 사용량 · 복사 · 애매한 질문', () => {
+  test('요청 본문: 이전 대화가 없으면 예전과 똑같이 {q, limit}', () => {
+    assert.deepStrictEqual(buildAskRequest('add 는?', 5), { q: 'add 는?', limit: 5 });
+  });
+  test('요청 본문: 이전 대화는 최근 2개만, stream 은 켤 때만', () => {
+    const h = [{ q: '1', answer: 'a' }, { q: '2', answer: 'b' }, { q: '3', answer: 'x'.repeat(2000) }];
+    const body = buildAskRequest('4', 10, h, true) as { history: { q: string; answer: string }[]; stream: boolean };
+    assert.deepStrictEqual(body.history.map((x) => x.q), ['2', '3']);
+    assert.strictEqual(body.history[1].answer.length, 1500);
+    assert.strictEqual(body.stream, true);
+  });
+  test('history_used: 서버가 주면 숫자, 안 주면 null', () => {
+    const base = { status: 'answered', answer: '네', sources: [], model: 'm', usage: null };
+    assert.strictEqual(parseAskResponse(JSON.stringify(base)).historyUsed, null);
+    assert.strictEqual(parseAskResponse(JSON.stringify({ ...base, history_used: 1 })).historyUsed, 1);
+    assert.throws(() => parseAskResponse(JSON.stringify({ ...base, history_used: -1 })), AskError);
+  });
+  test('SSE 조각 자르기: 덜 온 조각은 rest 로 남긴다 · CRLF · 주석 · 여러 줄 data', () => {
+    const a = parseSse('event: sources\ndata: {"sources":[]}\n\nevent: delta\ndata: {"text":"안');
+    assert.deepStrictEqual(a.events, [{ event: 'sources', data: '{"sources":[]}' }]);
+    const b = parseSse(a.rest + '녕"}\r\n\r\n: ping\n\ndata: a\ndata: b\n\n');
+    assert.deepStrictEqual(b.events, [{ event: 'delta', data: '{"text":"안녕"}' }, { event: 'message', data: 'a\nb' }]);
+    assert.strictEqual(b.rest, '');
+  });
+  test('저장된 답변 키: 띄어쓰기·대소문자·끝의 ? 는 같은 질문', () => {
+    assert.strictEqual(askCacheKey('  Add   함수 뭐야 ?? '), askCacheKey('add 함수 뭐야'));
+    assert.notStrictEqual(askCacheKey('add 함수 뭐야'), askCacheKey('sub 함수 뭐야'));
+  });
+  test('오늘 사용량: 날짜가 바뀌면 0부터', () => {
+    const d1 = localDateKey(new Date(2026, 10, 11, 23, 59));
+    assert.strictEqual(d1, '2026-11-11');
+    const s1 = addUsage(undefined, d1, 800);
+    const s2 = addUsage(s1, d1, 0);
+    assert.deepStrictEqual(s2, { date: d1, count: 2, tokens: 800 });
+    assert.deepStrictEqual(todayUsage(s2, '2026-11-12'), { date: '2026-11-12', count: 0, tokens: 0 });
+    assert.deepStrictEqual(addUsage(s2, '2026-11-12', 10), { date: '2026-11-12', count: 1, tokens: 10 });
+  });
+  test('답변 복사: 질문 · 답변 · 참고 코드 목록 마크다운', () => {
+    const md = answerToMarkdown('add 뭐야?', 'add 입니다 [S1].', [
+      { citation_id: 'S1', function_name: 'add', file_path: 'sample.py', start_line: 1, end_line: 2, language: 'python' },
+    ]);
+    assert.strictEqual(md, '**Q. add 뭐야?**\n\nadd 입니다 [S1].\n\n- [S1] add — sample.py:1-2 (python)');
+    assert.ok(answerToMarkdown('q', '', []).includes('근거 부족'));
+  });
+  test('애매한 질문: 너무 짧거나 내용 없는 말만', () => {
+    for (const q of ['함수 ?', '이거 뭐야?', '코드 설명해줘 ?', 'what is this?', '정렬함수?']) {
+      assert.strictEqual(isVagueQuestion(q), true, q);
+    }
+    for (const q of ['정렬하는 함수 어떻게 동작해?', 'add 함수는 뭘 반환해?', '두 숫자 더하는 함수 설명해줘 ?', '']) {
+      assert.strictEqual(isVagueQuestion(q), false, q);
+    }
   });
 });

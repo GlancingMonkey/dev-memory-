@@ -23,23 +23,39 @@
     "commands": [
       {
         "command": "codeMemory.saveSnippet",
-        "title": "Code Memory: 코드 저장 (선택 또는 커서가 있는 함수)"
+        "title": "Code Memory: 💾 코드 저장 (선택 또는 커서가 있는 함수)"
       },
       {
         "command": "codeMemory.focusSearch",
-        "title": "Code Memory: 검색창 열기"
+        "title": "Code Memory: 검색창 열기",
+        "icon": "$(search)"
       },
       {
         "command": "codeMemory.switchMode",
-        "title": "Code Memory: 모드 바꾸기 (mock / 실제 서버)"
+        "title": "Code Memory: 메뉴 · 모드 바꾸기 (mock / 실제 서버)",
+        "icon": "$(beaker)"
       },
       {
         "command": "codeMemory.findSimilar",
-        "title": "Code Memory: 비슷한 코드 찾기"
+        "title": "Code Memory: 🔍 비슷한 코드 찾기"
       },
       {
         "command": "codeMemory.openWalkthrough",
-        "title": "Code Memory: 시작하기 안내"
+        "title": "Code Memory: 시작하기 안내",
+        "icon": "$(question)"
+      },
+      {
+        "command": "codeMemory.askAboutSelection",
+        "title": "Code Memory: ✦ 이 코드에 대해 묻기"
+      },
+      {
+        "command": "codeMemory.exportFeedback",
+        "title": "Code Memory: AI 피드백 내보내기",
+        "icon": "$(export)"
+      },
+      {
+        "command": "codeMemory.runOnFunction",
+        "title": "Code Memory: 함수에 실행 (내부용)"
       }
     ],
     "menus": {
@@ -47,12 +63,40 @@
         {
           "command": "codeMemory.saveSnippet",
           "when": "editorTextFocus",
-          "group": "navigation@1"
+          "group": "navigation@0.1"
+        },
+        {
+          "command": "codeMemory.askAboutSelection",
+          "when": "editorTextFocus",
+          "group": "navigation@0.2"
         },
         {
           "command": "codeMemory.findSimilar",
-          "when": "editorHasSelection",
+          "when": "editorTextFocus",
+          "group": "navigation@0.3"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "codeMemory.switchMode",
+          "when": "view == codeMemory.searchView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codeMemory.exportFeedback",
+          "when": "view == codeMemory.searchView",
           "group": "navigation@2"
+        },
+        {
+          "command": "codeMemory.openWalkthrough",
+          "when": "view == codeMemory.searchView",
+          "group": "navigation@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "codeMemory.runOnFunction",
+          "when": "false"
         }
       ]
     },
@@ -65,6 +109,11 @@
       {
         "command": "codeMemory.focusSearch",
         "key": "ctrl+alt+f"
+      },
+      {
+        "command": "codeMemory.askAboutSelection",
+        "key": "ctrl+alt+a",
+        "when": "editorTextFocus"
       }
     ],
     "viewsContainers": {
@@ -123,6 +172,23 @@
           "minimum": 1,
           "maximum": 300,
           "description": "검색 요청 제한 시간(초)"
+        },
+        "codeMemory.askTimeoutSeconds": {
+          "type": "integer",
+          "default": 45,
+          "minimum": 1,
+          "maximum": 300,
+          "description": "AI 질문(POST /ask) 제한 시간(초). 시간이 넘어도 자동으로 다시 보내지 않는다"
+        },
+        "codeMemory.askOnQuestionMark": {
+          "type": "boolean",
+          "default": true,
+          "description": "검색창 끝에 ? 가 있으면 Enter 로 바로 AI 질문. 끄면 Enter 는 항상 일반 검색 (Ctrl+Enter 는 계속 AI 질문)"
+        },
+        "codeMemory.codeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "함수 위에 \"💾 저장 | ✦ AI에게 묻기 | 🔍 비슷한 코드\" 표시 (프로젝트 폴더 안 파일만)"
         }
       }
     },
