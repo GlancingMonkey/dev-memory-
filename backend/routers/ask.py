@@ -15,13 +15,21 @@ from backend.llm import (
     generate_answer,
 )
 from backend.schemas.ask import AskRequest, AskResponse, AskSource, AskUsage
-from rag.context import INSUFFICIENT_ANSWER, render_context, select_context
+from rag.context import (
+    DEFAULT_CONTEXT_BUDGET,
+    build_context,
+    build_rag_messages,
+)
 from rag.embedding import EmbeddingInputError, embed_query
 
 router = APIRouter(tags=["ask"])
 logger = logging.getLogger(__name__)
 
 ANSWER_CITATION = re.compile(r"\[(S[1-9][0-9]*)\]")
+INSUFFICIENT_ANSWER = (
+    "저장된 코드만으로는 질문에 답할 근거가 부족합니다. "
+    "검색 조건이나 질문을 바꿔 주세요."
+)
 
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
@@ -68,60 +76,48 @@ def ask_endpoint(
         ) from None
 
     if not results:
-        return AskResponse(
-            status="insufficient_context",
-            answer=INSUFFICIENT_ANSWER,
-            sources=[],
-            model=None,
-            usage=None,
-        )
+        return _insufficient_context()
 
     try:
-        sources, context = select_context(
-            results,
-            lambda value: count_context_tokens(
-                context=value,
-                deadline=deadline,
-            ),
-        )
-        if not sources:
-            return AskResponse(
-                status="insufficient_context",
-                answer=INSUFFICIENT_ANSWER,
-                sources=[],
-                model=None,
-                usage=None,
-            )
-
-        input_tokens = count_input_tokens(
-            question=question,
-            context=context,
+        token_budget = DEFAULT_CONTEXT_BUDGET
+        count_context = lambda text: count_context_tokens(
+            context=text,
             deadline=deadline,
         )
-        while input_tokens > MAX_INPUT_TOKENS and sources:
-            sources.pop()
-            if not sources:
-                context = ""
-                return AskResponse(
-                    status="insufficient_context",
-                    answer=INSUFFICIENT_ANSWER,
-                    sources=[],
-                    model=None,
-                    usage=None,
+        context = build_context(
+            results,
+            count_tokens=count_context,
+            token_budget=token_budget,
+        )
+        if not context.has_sources:
+            return _insufficient_context()
+
+        messages = build_rag_messages(question, context)
+        input_tokens = count_input_tokens(messages=messages, deadline=deadline)
+        while input_tokens > MAX_INPUT_TOKENS:
+            if token_budget <= 1:
+                raise HTTPException(
+                    status_code=422,
+                    detail="요청이 최대 입력 토큰을 초과합니다.",
                 )
-            context = render_context(sources)
-            input_tokens = count_input_tokens(
-                question=question,
-                context=context,
-                deadline=deadline,
+            token_budget = max(1, token_budget // 2)
+            context = build_context(
+                results,
+                count_tokens=count_context,
+                token_budget=token_budget,
             )
+            if not context.has_sources:
+                return _insufficient_context()
+            messages = build_rag_messages(question, context)
+            input_tokens = count_input_tokens(messages=messages, deadline=deadline)
 
         _check_deadline(deadline)
         model_answer, model_name, usage = generate_answer(
-            question=question,
-            context=context,
+            messages=messages,
             deadline=deadline,
         )
+    except HTTPException:
+        raise
     except LLMTimeoutError:
         raise _error(
             504,
@@ -143,20 +139,14 @@ def ask_endpoint(
         ) from None
 
     if model_answer.status == "insufficient_context":
-        if model_answer.citation_ids:
+        if model_answer.citation_ids or ANSWER_CITATION.search(model_answer.answer):
             raise _invalid_model_response()
-        return AskResponse(
-            status="insufficient_context",
-            answer=INSUFFICIENT_ANSWER,
-            sources=[],
-            model=model_name,
-            usage=AskUsage(**usage),
-        )
+        return _insufficient_context(model=model_name, usage=usage)
 
     answer = model_answer.answer.strip()
     answer_ids = ANSWER_CITATION.findall(answer)
     supplied_ids = model_answer.citation_ids
-    valid_ids = {f"S{index}" for index in range(1, len(sources) + 1)}
+    valid_ids = {source.citation_id for source in context.sources}
     if (
         not answer
         or not answer_ids
@@ -166,15 +156,16 @@ def ask_endpoint(
     ):
         raise _invalid_model_response()
 
-    source_by_id = {
-        f"S{index}": source for index, source in enumerate(sources, start=1)
-    }
+    try:
+        cited_sources = context.cited_sources(supplied_ids)
+    except ValueError:
+        raise _invalid_model_response() from None
+
     return AskResponse(
         status="answered",
         answer=answer,
         sources=[
-            AskSource(citation_id=citation_id, **source_by_id[citation_id].model_dump())
-            for citation_id in supplied_ids
+            AskSource(**source) for source in cited_sources
         ],
         model=model_name,
         usage=AskUsage(**usage),
@@ -186,4 +177,18 @@ def _invalid_model_response() -> HTTPException:
         502,
         "llm_response_invalid",
         "AI 답변의 출처를 검증할 수 없습니다. 질문을 다시 실행해 주세요.",
+    )
+
+
+def _insufficient_context(
+    *,
+    model: str | None = None,
+    usage: dict[str, int] | None = None,
+) -> AskResponse:
+    return AskResponse(
+        status="insufficient_context",
+        answer=INSUFFICIENT_ANSWER,
+        sources=[],
+        model=model,
+        usage=AskUsage(**usage) if usage is not None else None,
     )

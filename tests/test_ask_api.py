@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.llm import LLMServiceError, LLMTimeoutError, ModelAnswer
+from rag.context import build_context
 from rag.embedding import EmbeddingInputError
 
 DB_SOURCE = {
@@ -19,6 +20,7 @@ DB_SOURCE = {
     "score": 0.91,
 }
 USAGE = {"input_tokens": 120, "output_tokens": 32, "total_tokens": 152}
+RAG_CONTEXT = build_context([DB_SOURCE], count_tokens=lambda _: 80)
 
 
 class AskApiTests(unittest.TestCase):
@@ -51,6 +53,7 @@ class AskApiTests(unittest.TestCase):
             patch("backend.main.warmup_model"),
             patch("backend.routers.ask.embed_query", return_value=[1.0]),
             patch("backend.routers.ask.search_snippets", return_value=[DB_SOURCE]),
+            patch("backend.routers.ask.build_context", return_value=RAG_CONTEXT),
             patch("backend.routers.ask.count_context_tokens", return_value=80),
             patch("backend.routers.ask.count_input_tokens", return_value=120),
             patch(
@@ -81,6 +84,7 @@ class AskApiTests(unittest.TestCase):
             patch("backend.main.warmup_model"),
             patch("backend.routers.ask.embed_query", return_value=[1.0]),
             patch("backend.routers.ask.search_snippets", return_value=[DB_SOURCE]),
+            patch("backend.routers.ask.build_context", return_value=RAG_CONTEXT),
             patch("backend.routers.ask.count_context_tokens", return_value=80),
             patch("backend.routers.ask.count_input_tokens", return_value=120),
             patch(
@@ -140,6 +144,7 @@ class AskApiTests(unittest.TestCase):
             patch("backend.main.warmup_model"),
             patch("backend.routers.ask.embed_query", return_value=[1.0]),
             patch("backend.routers.ask.search_snippets", return_value=[DB_SOURCE]),
+            patch("backend.routers.ask.build_context", return_value=RAG_CONTEXT),
             patch("backend.routers.ask.count_context_tokens", return_value=80),
             patch("backend.routers.ask.count_input_tokens", return_value=120),
             patch(

@@ -32,8 +32,7 @@ class LLMClientTests(unittest.TestCase):
 
         with patch("backend.llm._client", return_value=client):
             answer, model, usage = generate_answer(
-                question="무엇을 하나요?",
-                context='{"citation_id":"S1"}',
+                messages=[{"role": "user", "content": "무엇을 하나요?"}],
                 deadline=10**20,
             )
 
@@ -76,8 +75,7 @@ class LLMClientTests(unittest.TestCase):
         with patch("backend.llm._client", return_value=client):
             with self.assertRaises(LLMResponseError):
                 generate_answer(
-                    question="무엇을 하나요?",
-                    context='{"citation_id":"S1"}',
+                    messages=[{"role": "user", "content": "무엇을 하나요?"}],
                     deadline=10**20,
                 )
 
