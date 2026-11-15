@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import {
-  addUsage, answerToMarkdown, askCacheKey, AskError, askErrorFor, AskResponse, AskSource, AskTurn, buildAskRequest, clamp,
-  EmbeddingStatus, endsWithQuestionMark, isVagueQuestion, localDateKey, looksLikeQuestion, parseAskResponse, parseSse, reindent,
-  todayUsage, UsageDay,
+  addUsage, answerToMarkdown, askCacheKey, AskError, askErrorFor, AskResponse, AskSource, AskTurn, buildAskRequest, buildSearchUrl,
+  checkAppliedFilter, clamp, EmbeddingStatus, endsWithQuestionMark, errorDetailText, FILTER_MAX_LENGTH, FilterCheck, filterLocally,
+  FilterOptions, hasFilter, isVagueQuestion, localDateKey, looksLikeQuestion, normalizeFilter, parseAskResponse, parseFilterOptions,
+  parseSse, reindent, SearchFilter, todayUsage, UsageDay,
 } from './logic';
 
 // ─────────────────────────────────────────────
@@ -57,6 +58,29 @@ const MOCK_RESULTS: SearchResult[] = [
     code: 'def sort_users(users):\n    return sorted(users, key=lambda user: user["age"])',
     score: 0.77,
   },
+  // 아래 둘은 필터 시험용 예시 (mock 에서만 나온다)
+  {
+    id: 4,
+    project_name: 'demo-project',
+    file_path: 'src/sort.ts',
+    language: 'typescript',
+    function_name: 'sortByDate',
+    start_line: 1,
+    end_line: 3,
+    code: 'export function sortByDate(items: { date: number }[]) {\n  return [...items].sort((a, b) => a.date - b.date);\n}',
+    score: 0.72,
+  },
+  {
+    id: 5,
+    project_name: 'demo-project',
+    file_path: 'utils/math.py',
+    language: 'python',
+    function_name: 'safe_divide',
+    start_line: 1,
+    end_line: 4,
+    code: 'def safe_divide(a, b):\n    if b == 0:\n        return None\n    return a / b',
+    score: 0.66,
+  },
 ];
 
 // ─────────────────────────────────────────────
@@ -75,18 +99,25 @@ class SearchError extends Error {
   }
 }
 
-async function searchSnippets(query: string): Promise<SearchResult[]> {
+// 검색 결과 + 서버가 필터를 진짜 적용했는지 (applied / none / ignored)
+interface SearchOutcome {
+  results: SearchResult[];
+  check: FilterCheck;
+}
+
+async function searchSnippets(query: string, filter: SearchFilter): Promise<SearchOutcome> {
   const config = vscode.workspace.getConfiguration('codeMemory');
 
   if (config.get<boolean>('mock', true)) {
     await new Promise((resolve) => setTimeout(resolve, 300));
-    return MOCK_RESULTS;   // mock 은 검색어와 상관없이 샘플 3개
+    // mock 은 검색어와 상관없이 샘플. 필터는 서버처럼 먼저 걸러서 돌려준다
+    return { results: filterLocally(MOCK_RESULTS, filter), check: hasFilter(filter) ? 'applied' : 'none' };
   }
 
-  // API_CONTRACT.md: GET /search?q=...&limit=N → { results: [...] }. limit 은 설정값(계약 범위 1~20)
+  // API_CONTRACT.md: GET /search?q=...&limit=N[&project=..&language=..] → { results: [...], filters?: {...} }
   const baseUrl = config.get<string>('apiUrl', 'http://localhost:8000').replace(/\/+$/, '');
   const limit = Math.min(20, Math.max(1, Math.round(config.get<number>('searchLimit', 10))));
-  const url = `${baseUrl}/search?q=${encodeURIComponent(query)}&limit=${limit}`;
+  const url = buildSearchUrl(baseUrl, query, limit, filter);
   const timeoutSec = clamp(config.get<number>('searchTimeoutSeconds'), 1, 300, 10);
 
   let res: Response;
@@ -103,22 +134,59 @@ async function searchSnippets(query: string): Promise<SearchResult[]> {
   }
 
   const text = await res.text();
-  if (!res.ok) {
-    throw new SearchError(`서버 오류 (HTTP ${res.status})`, text.slice(0, 300), 'server');
-  }
-
   // 응답이 예상한 모양이 아니면 빈 결과로 넘기지 말고 오류로 보여준다
   let data: unknown;
   try {
     data = JSON.parse(text);
   } catch {
+    data = undefined;
+  }
+  if (!res.ok) {
+    const detail = errorDetailText(data) || text.slice(0, 300);
+    if (res.status === 422) {
+      throw new SearchError('검색 조건을 확인하세요 (HTTP 422)', detail, 'server');
+    }
+    throw new SearchError(`서버 오류 (HTTP ${res.status})`, detail, 'server');
+  }
+  if (data === undefined) {
     throw new SearchError('응답 형식 오류', `JSON 이 아닙니다: ${text.slice(0, 200)}`, 'format');
   }
   const results = (data as { results?: unknown }).results;
   if (!Array.isArray(results)) {
     throw new SearchError('응답 형식 오류', `results 배열이 없습니다: ${text.slice(0, 200)}`, 'format');
   }
-  return results as SearchResult[];
+  const check = checkAppliedFilter(filter, (data as { filters?: unknown }).filters);
+  // 옛 서버가 조건을 무시했으면 화면에서라도 거른다 (웹페이지가 "화면에서만 거름"으로 표시)
+  const rows = results as SearchResult[];
+  return { results: check === 'ignored' ? filterLocally(rows, filter) : rows, check };
+}
+
+// 필터 목록 — GET /filters (DB 에 있는 프로젝트·언어). mock 이면 샘플에서 센다
+async function loadFilterOptions(): Promise<FilterOptions> {
+  const config = vscode.workspace.getConfiguration('codeMemory');
+  if (config.get<boolean>('mock', true)) {
+    const count = (key: 'project_name' | 'language') => {
+      const m = new Map<string, number>();
+      MOCK_RESULTS.forEach((r) => { const k = r[key] ?? ''; if (k) { m.set(k, (m.get(k) ?? 0) + 1); } });
+      return [...m].map(([name, n]) => ({ name, count: n }));
+    };
+    return { projects: count('project_name'), languages: count('language') };
+  }
+  const baseUrl = config.get<string>('apiUrl', 'http://localhost:8000').replace(/\/+$/, '');
+  const timeoutSec = clamp(config.get<number>('searchTimeoutSeconds'), 1, 300, 10);
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}/filters`, { signal: AbortSignal.timeout(timeoutSec * 1000) });
+  } catch {
+    throw new Error('서버에 연결할 수 없어요');
+  }
+  if (res.status === 404) {
+    throw new Error('필터 목록 API(GET /filters)가 아직 없어요');
+  }
+  if (!res.ok) {
+    throw new Error(`필터 목록을 못 받았어요 (HTTP ${res.status})`);
+  }
+  return parseFilterOptions(await res.text());
 }
 
 // ─────────────────────────────────────────────
@@ -353,7 +421,8 @@ class CompareDocs implements vscode.TextDocumentContentProvider {
 export const compareDocs = new CompareDocs();
 
 type FromWebview =
-  | { type: 'search'; query: string }
+  | { type: 'search'; query: string; reqId?: number; filter?: Partial<SearchFilter> }
+  | { type: 'loadFilters' }
   | { type: 'open'; result: SearchResult }
   | { type: 'insert'; code: string }
   | { type: 'copy'; code: string }
@@ -420,6 +489,7 @@ const HISTORY_MAX = 20;
 interface UiPrefs {
   view: 'full' | 'compact';
   historyOpen: boolean;
+  filter?: SearchFilter;   // 검색 범위 (프로젝트·언어) — 다시 열어도 유지
   askHintSeen?: boolean;   // "끝에 ? 를 붙이면 AI" 첫 안내를 닫았는지
 }
 const PREFS_KEY = 'codeMemory.uiPrefs';
@@ -429,6 +499,8 @@ const DEFAULT_PREFS: UiPrefs = { view: 'full', historyOpen: false };
 interface SavedSearch {
   query: string;
   results: SearchResult[];
+  filter?: SearchFilter;
+  check?: FilterCheck;
 }
 const STATE_KEY = 'codeMemory.lastSearch';
 const RECENT_KEY = 'codeMemory.recentQueries';   // 최근 검색어 (최대 5개)
@@ -675,22 +747,39 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
           const saved = this.state.get<SavedSearch>(STATE_KEY);
           if (this.pendingQuery === undefined && saved) {
             const results = await withLocalStatus(saved.results);
-            view.webview.postMessage({ type: 'restore', query: saved.query, results });
+            view.webview.postMessage({ type: 'restore', query: saved.query, results, filter: saved.filter ?? null, check: saved.check ?? 'none' });
           }
           this.flush();
           break;
         }
         case 'search': {
+          const filter = normalizeFilter(msg.filter);
           view.webview.postMessage({ type: 'recent', items: await this.pushRecent(msg.query, false) });
           try {
-            const results = await searchSnippets(msg.query);
-            view.webview.postMessage({ type: 'results', query: msg.query, results: await withLocalStatus(results) });
-            await this.state.update(STATE_KEY, { query: msg.query, results } satisfies SavedSearch);
+            if (filter.project.length > FILTER_MAX_LENGTH || filter.language.length > FILTER_MAX_LENGTH) {
+              throw new SearchError('검색 조건을 확인하세요', `프로젝트·언어 이름은 ${FILTER_MAX_LENGTH}자까지예요.`, 'server');
+            }
+            const { results, check } = await searchSnippets(msg.query, filter);
+            view.webview.postMessage({
+              type: 'results', reqId: msg.reqId, query: msg.query, filter, check, results: await withLocalStatus(results),
+            });
+            await this.state.update(STATE_KEY, { query: msg.query, results, filter, check } satisfies SavedSearch);
           } catch (err) {
             const title = err instanceof SearchError ? err.title : '검색 실패';
             const detail = err instanceof SearchError ? err.detail : err instanceof Error ? err.message : String(err);
             const kind = err instanceof SearchError ? err.kind : 'server';
-            view.webview.postMessage({ type: 'error', title, detail, kind });
+            view.webview.postMessage({ type: 'error', reqId: msg.reqId, title, detail, kind });
+          }
+          break;
+        }
+        case 'loadFilters': {
+          const openFolders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.name);
+          try {
+            view.webview.postMessage({ type: 'filterOptions', options: await loadFilterOptions(), openFolders });
+          } catch (err) {
+            view.webview.postMessage({
+              type: 'filterOptions', options: null, openFolders, error: err instanceof Error ? err.message : String(err),
+            });
           }
           break;
         }
@@ -878,8 +967,8 @@ function getHtml(webview: vscode.Webview): string {
 
   /* 요약줄: 결과 수 · 자세히/간단히 · 기록 복사 · 지우기 */
   .bar { display: flex; align-items: center; gap: 4px; min-height: 22px; margin: 0 0 4px; font-size: 11px; color: var(--vscode-descriptionForeground); }
-  .bar .grow { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
-  .bar .sq { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--vscode-foreground); }
+  .bar .grow { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden; }
+  .bar .sq { flex: 0 1 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; color: var(--vscode-foreground); }
   .bar .sdot, .bar .sc { flex: none; }
   .tools { display: flex; align-items: center; gap: 2px; flex: none; }
   .seg { display: inline-flex; border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, #8884)); border-radius: 4px; overflow: hidden; margin-right: 2px; }
@@ -892,10 +981,44 @@ function getHtml(webview: vscode.Webview): string {
   .ibtn svg.i { width: 12px; height: 12px; }
 
   /* 결과 필터 (언어·프로젝트가 2가지 이상일 때만) */
-  .filters { display: flex; gap: 6px; margin: 0 0 6px; }
-  .filters select { flex: 1; min-width: 0; padding: 2px 4px; font: inherit; font-size: 11px; border-radius: 3px;
-                    color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background);
-                    border: 1px solid var(--vscode-dropdown-border, transparent); }
+  /* 검색 범위 (프로젝트·언어) — 서버에서 먼저 거른다 */
+  .frow { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 0 0 6px; font-size: 11.5px; }
+  .flbl { font-size: 11px; color: var(--vscode-descriptionForeground); margin-right: 1px; }
+  .fchip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 8px; border-radius: 12px; font-size: 11.5px;
+           color: var(--vscode-foreground); background: transparent;
+           border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, #8886)); }
+  .fchip:hover { background: var(--vscode-list-hoverBackground); }
+  .fchip svg.i { width: 12px; height: 12px; }
+  .fchip .fk { color: var(--vscode-descriptionForeground); }
+  .fchip .fv { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+  .fchip.on { color: var(--vscode-textLink-foreground); border-color: var(--vscode-textLink-foreground);
+              background: color-mix(in srgb, var(--vscode-textLink-foreground) 10%, transparent); }
+  .fchip.on .fk { color: inherit; opacity: 0.8; }
+  .fchip.open { outline: 1px solid var(--vscode-focusBorder); }
+  .fchip .fx { display: inline-flex; margin-left: 1px; opacity: 0.85; border-radius: 3px; }
+  .fchip .fx:hover { opacity: 1; background: color-mix(in srgb, var(--vscode-textLink-foreground) 20%, transparent); }
+  .fclear { margin-left: auto; }
+  .fmenu { position: absolute; top: calc(100% + 3px); z-index: 12; width: 240px; max-width: calc(100vw - 24px); padding: 4px 0; border-radius: 5px; font-size: 12px;
+           background: var(--vscode-quickInput-background, var(--vscode-editorWidget-background));
+           border: 1px solid var(--vscode-widget-border, var(--vscode-input-border, #8884));
+           box-shadow: 0 6px 16px var(--vscode-widget-shadow, #0008); }
+  .fmenu input { box-sizing: border-box; width: calc(100% - 12px); margin: 2px 6px 4px; padding: 3px 6px; font: inherit; font-size: 11.5px; border-radius: 3px;
+                 color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+                 border: 1px solid var(--vscode-focusBorder); outline: none; }
+  .fmenu hr { border: 0; border-top: 1px solid var(--vscode-widget-border, #8884); margin: 3px 0; }
+  .fit { display: flex; align-items: center; gap: 6px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
+  .fit.hl, .fit:hover { color: var(--vscode-list-activeSelectionForeground); background: var(--vscode-list-activeSelectionBackground); }
+  .fit .fchk { width: 12px; color: var(--vscode-textLink-foreground); }
+  .fit .fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .fit .ftag { flex: none; font-size: 10px; padding: 0 5px; border-radius: 7px; color: var(--vscode-textLink-foreground);
+               border: 1px solid color-mix(in srgb, var(--vscode-textLink-foreground) 50%, transparent); }
+  .fit .fcount { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .fit.hl .fcount, .fit:hover .fcount { color: inherit; opacity: 0.8; }
+  .ffoot { padding: 2px 10px; font-size: 10.5px; color: var(--vscode-descriptionForeground); }
+  .ffoot.err { color: var(--vscode-editorWarning-foreground); }
+  .fwarn { margin: 0 0 6px; }
+  .bar .scope { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--vscode-textLink-foreground); }
+  .bar .scope.warn { color: var(--vscode-editorWarning-foreground); }
 
   .content { padding: 0 10px; }
   .intro { font-size: 11px; color: var(--vscode-descriptionForeground); margin: 2px 2px 6px; }
@@ -1188,6 +1311,13 @@ function getHtml(webview: vscode.Webview): string {
       <button id="go" class="go" type="submit">검색</button>
       <div id="recent" class="recent" hidden></div>
     </form>
+    <div id="frow" class="frow">
+      <span class="flbl">범위</span>
+      <button id="fProject" class="fchip" type="button"></button>
+      <button id="fLanguage" class="fchip" type="button"></button>
+      <button id="fClear" class="link-btn fclear" type="button" hidden>모두 해제</button>
+      <div id="fmenu" class="fmenu" hidden></div>
+    </div>
     <div id="vague" class="vague" hidden></div>
     <div id="askHint" class="askhint-bar" hidden title="Ctrl+Enter 는 항상 AI 질문 · Shift+Enter 는 항상 일반 검색">
       <span>끝에 <b>?</b> 를 붙이면 AI에게 물어봐요</span>
@@ -1197,14 +1327,11 @@ function getHtml(webview: vscode.Webview): string {
       <span id="summary" class="grow"></span>
       <span id="tools" class="tools" hidden>
         <span class="seg"><button id="vFull" type="button">자세히</button><button id="vCompact" type="button">간단히</button></span>
-        <button id="copyRecord" class="ibtn" type="button" title="질문·순위·id·위치·유사도를 표로 복사"></button>
+        <button id="copyRecord" class="ibtn" type="button" title="기록 복사 — 질문·범위·순위·id·위치·유사도를 표로"></button>
         <button id="clearResults" class="ibtn" type="button" title="결과 지우기"></button>
       </span>
     </div>
-    <div id="filters" class="filters" hidden>
-      <select id="fLang" title="언어로 거르기"></select>
-      <select id="fProj" title="프로젝트로 거르기"></select>
-    </div>
+    <div id="fwarn" class="anote fwarn" hidden></div>
   </div>
 
   <div class="content">
@@ -1248,7 +1375,6 @@ function getHtml(webview: vscode.Webview): string {
   const form = byId('form'), input = byId('q'), goBtn = byId('go'), recentBox = byId('recent');
   const header = byId('header'), bar = byId('bar'), summary = byId('summary'), tools = byId('tools');
   const vFull = byId('vFull'), vCompact = byId('vCompact'), copyRecordBtn = byId('copyRecord'), clearBtn = byId('clearResults');
-  const filtersBox = byId('filters'), fLang = byId('fLang'), fProj = byId('fProj');
   const intro = byId('intro'), chips = byId('chips'), list = byId('list'), banner = byId('banner');
   const histHead = byId('histHead'), histBody = byId('histBody'), toast = byId('toast');
   const answerBox = byId('answer'), suggestBox = byId('suggest'), askHint = byId('askHint');
@@ -1289,6 +1415,9 @@ function getHtml(webview: vscode.Webview): string {
     up: ['M7 11v9H4v-9z', 'M7 11l4-8a2 2 0 0 1 3 2l-1 5h6a2 2 0 0 1 2 2.3l-1.3 6.6A2 2 0 0 1 17.7 21H7'],
     down: ['M17 13V4h3v9z', 'M17 13l-4 8a2 2 0 0 1-3-2l1-5H5a2 2 0 0 1-2-2.3l1.3-6.6A2 2 0 0 1 6.3 3H17'],
     redo: ['M21 12a9 9 0 1 1-3-6.7L21 8', 'M21 3v5h-5'],
+    folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
+    code: ['M8 7l-5 5 5 5', 'M16 7l5 5-5 5'],
+    chevdown: ['M6 9l6 6 6-6'],
   };
 
   // ── 상태
@@ -1297,14 +1426,13 @@ function getHtml(webview: vscode.Webview): string {
   let current = null;        // { query, results, restored } — results 에 원래 순위(rank)를 붙여 둔다
   let mode = { mock: true, apiUrl: '' };
   let prefs = { view: 'full', historyOpen: false, askHintSeen: false };
-  let filter = { lang: '', proj: '' };
   let recentItems = [];
   let activeIdx = -1;        // 키보드 ↑↓ 로 고른 최근 검색어 위치
   let historyItems = [];
   let toastTimer = 0;
 
   // 고정 아이콘 채우기
-  copyRecordBtn.append(icon('record'), document.createTextNode('기록 복사'));
+  copyRecordBtn.append(icon('record'));   // 좁은 패널에서 요약줄과 안 겹치게 아이콘만 (설명은 마우스 올리면)
   clearBtn.append(icon('close'));
   vFull.classList.add('on');
 
@@ -1335,12 +1463,16 @@ function getHtml(webview: vscode.Webview): string {
     updateMode();
   }
   // 요약줄: [검색어(길면 …)] · [개수] — 개수는 잘리지 않게
-  function setSummary(query, countText, title) {
+  function setSummary(query, countText, title, scope) {
     summary.replaceChildren();
     if (query) {
       summary.append(el('span', 'sq', query), el('span', 'sdot', '·'));
     }
     summary.append(el('span', 'sc', countText));
+    if (scope) {
+      summary.append(el('span', 'sdot', '·'), el('span', scope.warn ? 'scope warn' : 'scope', scope.text));
+      summary.title += (summary.title ? ' · ' : '') + '범위: ' + scopeLabel(sfilter);
+    }
     summary.title = (query ? '검색어: ' + query + (title ? ' · ' : '') : '') + (title || '');
   }
 
@@ -1364,8 +1496,11 @@ function getHtml(webview: vscode.Webview): string {
     updateAskHint();
   });
 
-  function search(query) {
-    if (!query || searching) { return; }
+  // opts.force: 범위를 바꿔서 다시 검색할 때 — 검색 중이어도 보낸다 (이전 응답은 번호로 버림)
+  function search(query, opts) {
+    opts = opts || {};
+    if (!query || (searching && !opts.force)) { return; }
+    closeFilterMenu();
     closeRecent();
     hideSuggest();
     // 이전 AI 답변은 지우지 않고 한 줄로 접는다 — 새 검색 결과를 가리지 않게 (생성 중이면 그대로 둔다)
@@ -1376,10 +1511,11 @@ function getHtml(webview: vscode.Webview): string {
     intro.hidden = true;
     bar.hidden = false;
     tools.hidden = true;
-    filtersBox.hidden = true;
-    setSummary(query, '검색 중…', '');
+    fWarn.hidden = true;
+    setSummary(query, '검색 중…', '', filterOn(sfilter) ? { text: '범위 적용' } : null);
     list.replaceChildren(el('div', 'skel'), el('div', 'skel'));
-    vscode.postMessage({ type: 'search', query: query });
+    searchSeq += 1;
+    vscode.postMessage({ type: 'search', query: query, reqId: searchSeq, filter: sfilter });
   }
 
   // Enter / 버튼: 끝에 ? 면 AI 질문, 아니면 일반 검색
@@ -1482,8 +1618,6 @@ function getHtml(webview: vscode.Webview): string {
   vCompact.addEventListener('click', function () { setView('compact'); });
 
   // ── 필터
-  fLang.addEventListener('change', function () { filter.lang = fLang.value; renderResults(); });
-  fProj.addEventListener('change', function () { filter.proj = fProj.value; renderResults(); });
 
   // ── B. 기록 복사: 9쪽 "현장에서 적을 실제 결과"에 붙여넣을 마크다운 표
   copyRecordBtn.addEventListener('click', function () {
@@ -1495,8 +1629,8 @@ function getHtml(webview: vscode.Webview): string {
       '질문: ' + current.query,
       '모드: ' + (mode.mock ? 'mock (서버 호출 안 함)' : '실제 서버 ' + mode.apiUrl) + ' · ' + stamp,
     ];
-    if (filter.lang || filter.proj) {
-      lines.push('필터: ' + [filter.lang, filter.proj].filter(Boolean).join(', ') + ' (전체 ' + current.results.length + '개 중 ' + rows.length + '개)');
+    if (filterOn(current.filter)) {
+      lines.push('범위: ' + scopeLabel(current.filter) + (current.check === 'ignored' ? ' (서버 미적용 — 화면에서만 거름)' : ' (서버에서 거름)'));
     }
     lines.push('', '| 순위 | id | 함수 | 위치 | 유사도 |', '|---|---|---|---|---|');
     rows.forEach(function (r) {
@@ -1504,16 +1638,17 @@ function getHtml(webview: vscode.Webview): string {
         ' | ' + (typeof r.score === 'number' ? r.score.toFixed(3) : '-') + ' |');
     });
     vscode.postMessage({ type: 'copyText', text: lines.join('\\n') });
-    flashLabel(copyRecordBtn, '복사됨 ✓', '기록 복사');
+    copyRecordBtn.replaceChildren(icon('check'));
+    copyRecordBtn.classList.add('done');
+    setTimeout(function () { copyRecordBtn.replaceChildren(icon('record')); copyRecordBtn.classList.remove('done'); }, 1500);
   });
 
   // ── 결과 지우기 → 처음 화면으로
   clearBtn.addEventListener('click', function () {
     current = null;
-    filter = { lang: '', proj: '' };
     list.replaceChildren();
     bar.hidden = true;
-    filtersBox.hidden = true;
+    fWarn.hidden = true;
     intro.hidden = false;
     input.value = '';
     input.focus();
@@ -1532,6 +1667,8 @@ function getHtml(webview: vscode.Webview): string {
         break;
       case 'prefs':
         prefs = Object.assign({ view: 'full', historyOpen: false, askHintSeen: false }, msg.prefs || {});
+        sfilter = normFilter(prefs.filter);
+        renderChips();
         updateAskHint();
         vFull.classList.toggle('on', prefs.view === 'full');
         vCompact.classList.toggle('on', prefs.view === 'compact');
@@ -1560,17 +1697,25 @@ function getHtml(webview: vscode.Webview): string {
         break;
       case 'restore':
         lastQuery = msg.query;
-        setResults(msg.query, msg.results, true);
+        setResults(msg.query, msg.results, true, msg.filter, msg.check);
         break;
       case 'results':
+        if (msg.reqId !== undefined && msg.reqId !== searchSeq) { break; }   // 범위를 바꾸기 전에 보낸 검색의 응답은 버린다
         setSearching(false);
         if (msg.query) { lastQuery = msg.query; }
-        setResults(lastQuery, msg.results, false);
+        setResults(lastQuery, msg.results, false, msg.filter, msg.check);
         showSuggest(lastQuery);
         break;
       case 'error':
+        if (msg.reqId !== undefined && msg.reqId !== searchSeq) { break; }
         setSearching(false);
         showError(msg.title, msg.detail, msg.kind);
+        break;
+      case 'filterOptions':
+        filterOpts = msg.options || null;
+        filterErr = msg.error || '';
+        openFolders = msg.openFolders || [];
+        if (menuKind) { const fi = fMenu.querySelector('input'); renderFilterMenu(fi ? fi.value : ''); }
         break;
       case 'answer':
         if (msg.reqId !== askSeq) { break; }   // 늦게 온 이전 질문의 답은 버린다
@@ -1602,71 +1747,211 @@ function getHtml(webview: vscode.Webview): string {
     }
   });
 
-  function setResults(query, results, restored) {
-    // 원래 순위를 붙여 둔다 — 필터로 걸러도 서버 순위가 그대로 보이게
-    current = { query: query, restored: restored, results: results.map(function (r, i) { return Object.assign({ rank: i + 1 }, r); }) };
-    filter = { lang: '', proj: '' };
+  function setResults(query, results, restored, usedFilter, check) {
+    current = {
+      query: query, restored: restored, filter: normFilter(usedFilter), check: check || 'none',
+      results: results.map(function (r, i) { return Object.assign({ rank: i + 1 }, r); }),
+    };
     intro.hidden = true;
     bar.hidden = false;
-    buildFilters();
+    renderFilterWarn();
     renderResults();
   }
 
   function visibleResults() {
-    if (!current) { return []; }
-    return current.results.filter(function (r) {
-      return (!filter.lang || r.language === filter.lang) && (!filter.proj || (r.project_name || '(없음)') === filter.proj);
-    });
+    return current ? current.results : [];
   }
 
-  function buildFilters() {
-    const langs = unique(current.results.map(function (r) { return r.language; }));
-    const projs = unique(current.results.map(function (r) { return r.project_name || '(없음)'; }));
-    fillSelect(fLang, '모든 언어', langs);
-    fillSelect(fProj, '모든 프로젝트', projs);
-    fLang.hidden = langs.length < 2;
-    fProj.hidden = projs.length < 2;
-    filtersBox.hidden = fLang.hidden && fProj.hidden;
+  // ── 검색 범위 (프로젝트·언어) — 서버에 조건으로 보내서 DB 에서 먼저 거른다 (GET /search?project=&language=)
+  //    목록은 GET /filters. 고르면 마지막 검색어로 바로 다시 검색. 늦게 온 이전 결과는 번호(searchSeq)로 버린다
+  const fProjectBtn = byId('fProject'), fLanguageBtn = byId('fLanguage'), fClearBtn = byId('fClear');
+  const fMenu = byId('fmenu'), fWarn = byId('fwarn'), fRow = byId('frow');
+  const FILTER_KINDS = {
+    project: { label: '프로젝트', icon: 'folder', btn: fProjectBtn, find: '프로젝트 찾기' },
+    language: { label: '언어', icon: 'code', btn: fLanguageBtn, find: '언어 찾기' },
+  };
+  let sfilter = { project: '', language: '' };   // 지금 고른 범위 (다음 검색에 쓴다)
+  let filterOpts = null;                          // GET /filters 결과 { projects, languages } — 없으면 null
+  let filterErr = '';
+  let openFolders = [];
+  let menuKind = '';
+  let menuIdx = 0;
+  let searchSeq = 0;
+
+  function normFilter(f) {
+    return {
+      project: f && typeof f.project === 'string' ? f.project.trim() : '',
+      language: f && typeof f.language === 'string' ? f.language.trim().toLowerCase() : '',
+    };
   }
-  function fillSelect(sel, allLabel, values) {
-    sel.replaceChildren();
-    const all = el('option', '', allLabel);
-    all.value = '';
-    sel.append(all);
-    values.forEach(function (v) {
-      const o = el('option', '', v);
-      o.value = v;
-      sel.append(o);
+  function filterOn(f) { return !!(f && (f.project || f.language)); }
+  function scopeLabel(f) { return [f.project, f.language].filter(Boolean).join(' · '); }
+
+  function renderChips() {
+    Object.keys(FILTER_KINDS).forEach(function (kind) {
+      const k = FILTER_KINDS[kind];
+      const v = sfilter[kind];
+      const b = k.btn;
+      b.replaceChildren(icon(k.icon), el('span', 'fk', k.label), el('span', 'fv', v || '전체'));
+      if (v) {
+        const x = el('span', 'fx');
+        x.title = k.label + ' 조건 해제';
+        x.append(icon('close'));
+        x.addEventListener('click', function (e) { e.stopPropagation(); setFilter(kind, ''); });
+        b.append(x);
+      } else {
+        b.append(icon('chevdown'));
+      }
+      b.classList.toggle('on', !!v);
+      b.classList.toggle('open', menuKind === kind);
+      b.title = v ? k.label + ': ' + v + ' 에서만 검색 (눌러서 바꾸기)' : k.label + ' 전체에서 검색 (눌러서 고르기)';
     });
-    sel.value = '';
+    fClearBtn.hidden = !filterOn(sfilter);
+  }
+
+  function setFilter(kind, value) {
+    sfilter = normFilter(Object.assign({}, sfilter, { [kind]: value }));
+    prefs.filter = sfilter;
+    vscode.postMessage({ type: 'prefs', prefs: prefs });
+    closeFilterMenu();
+    renderChips();
+    if (lastQuery) { search(lastQuery, { force: true }); }   // 바꾼 범위로 바로 다시 검색
+  }
+  fClearBtn.addEventListener('click', function () {
+    sfilter = { project: '', language: '' };
+    prefs.filter = sfilter;
+    vscode.postMessage({ type: 'prefs', prefs: prefs });
+    renderChips();
+    if (lastQuery) { search(lastQuery, { force: true }); }
+  });
+
+  function optionsOf(kind) {
+    if (!filterOpts) { return []; }
+    const list = (kind === 'project' ? filterOpts.projects : filterOpts.languages) || [];
+    const items = list.map(function (o) { return { name: o.name, count: o.count, open: kind === 'project' && openFolders.indexOf(o.name) >= 0 }; });
+    // 지금 열린 폴더는 맨 위로
+    items.sort(function (a, b) { return (b.open ? 1 : 0) - (a.open ? 1 : 0); });
+    return items;
+  }
+
+  function openFilterMenu(kind) {
+    if (menuKind === kind) { closeFilterMenu(); return; }
+    menuKind = kind;
+    menuIdx = 0;
+    vscode.postMessage({ type: 'loadFilters' });   // 열 때마다 최신 목록
+    renderFilterMenu('');
+    renderChips();
+    const finput = fMenu.querySelector('input');
+    if (finput) { finput.focus(); }
+  }
+  function closeFilterMenu() {
+    if (!menuKind) { return; }
+    menuKind = '';
+    fMenu.hidden = true;
+    fMenu.replaceChildren();
+    renderChips();
+  }
+  fProjectBtn.addEventListener('click', function () { openFilterMenu('project'); });
+  fLanguageBtn.addEventListener('click', function () { openFilterMenu('language'); });
+  document.addEventListener('mousedown', function (e) {
+    if (menuKind && !fRow.contains(e.target)) { closeFilterMenu(); }
+  });
+
+  // 목록: 전체 + DB 목록(찾기 칸으로 거름) + 목록에 없으면 "직접 입력"
+  function renderFilterMenu(typed) {
+    const k = FILTER_KINDS[menuKind];
+    if (!k) { return; }
+    let finput = fMenu.querySelector('input');
+    if (!finput) {
+      finput = el('input');
+      finput.placeholder = k.find;
+      finput.maxLength = 200;
+      finput.addEventListener('input', function () { menuIdx = 0; renderFilterMenu(finput.value); });
+      finput.addEventListener('keydown', function (e) {
+        const rows = fMenu.querySelectorAll('.fit');
+        if (e.key === 'ArrowDown') { e.preventDefault(); menuIdx = Math.min(menuIdx + 1, rows.length - 1); paintMenuIdx(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); menuIdx = Math.max(menuIdx - 1, 0); paintMenuIdx(); }
+        else if (e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.isComposing) { return; }   // 한글 조합 중 Enter 는 글자 확정만
+          if (rows[menuIdx]) { const b = k.btn; rows[menuIdx].click(); b.focus(); }
+        }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const b = k.btn; closeFilterMenu(); b.focus(); }
+      });
+      fMenu.replaceChildren(finput);
+    }
+    while (finput.nextSibling) { finput.nextSibling.remove(); }
+
+    const q = String(typed || '').trim();
+    const cur = sfilter[menuKind];
+    const add = function (label, value, opt) {
+      const row = el('div', 'fit');
+      row.append(el('span', 'fchk', value === cur ? '✓' : ''), el('span', 'fname', label));
+      if (opt && opt.open) { row.append(el('span', 'ftag', '열린 폴더')); }
+      if (opt && typeof opt.count === 'number') { row.append(el('span', 'fcount', String(opt.count))); }
+      row.addEventListener('mousedown', function (e) { e.preventDefault(); });
+      row.addEventListener('click', function () { setFilter(menuKind, value); });
+      fMenu.append(row);
+    };
+
+    if (!q) {
+      add('전체', '', null);
+      fMenu.append(el('hr'));
+    }
+    const all = optionsOf(menuKind);
+    const lower = q.toLowerCase();
+    const shown = all.filter(function (o) { return !q || o.name.toLowerCase().indexOf(lower) >= 0; });
+    shown.forEach(function (o) { add(o.name, o.name, o); });
+    const exact = all.some(function (o) { return o.name === q || (menuKind === 'language' && o.name.toLowerCase() === lower); });
+    if (q && !exact) {
+      add('"' + q + '" 직접 입력', q, null);
+    }
+    let foot = '';
+    if (filterErr) { foot = filterErr + ' · 이름을 직접 입력할 수 있어요'; }
+    else if (!filterOpts) { foot = '목록 불러오는 중…'; }
+    else if (!all.length) { foot = 'DB 에 저장된 ' + k.label + '가 없어요'; }
+    else { foot = 'DB 에 저장된 ' + k.label + ' · 숫자는 코드 수' + (mode.mock ? ' (mock 예시)' : ''); }
+    fMenu.append(el('hr'), el('div', filterErr ? 'ffoot err' : 'ffoot', foot));
+
+    fMenu.style.left = k.btn.offsetLeft + 'px';
+    fMenu.hidden = false;
+    paintMenuIdx();
+  }
+  function paintMenuIdx() {
+    fMenu.querySelectorAll('.fit').forEach(function (r, i) { r.classList.toggle('hl', i === menuIdx); });
+  }
+
+  // 결과 위 경고: 서버가 조건을 적용하지 않았을 때
+  function renderFilterWarn() {
+    const ignored = !!current && current.check === 'ignored';
+    fWarn.hidden = !ignored;
+    if (ignored) {
+      fWarn.replaceChildren(el('b', '', '서버가 범위 조건을 적용하지 않았어요'),
+        document.createTextNode(' — 응답에 적용한 조건(filters)이 없어서, 전체 검색 결과를 화면에서만 걸렀어요. Backend 버전을 확인하세요.'));
+    }
   }
 
   function renderResults() {
     list.replaceChildren();
+    const scoped = filterOn(current.filter);
+    const scope = scoped
+      ? (current.check === 'ignored' ? { text: '화면에서만 거름', warn: true } : { text: '범위 적용' })
+      : null;
     if (!current.results.length) {
       tools.hidden = true;
-      setSummary(current.query, current.restored ? '지난 검색 · 0개' : '0개', '');
-      list.append(emptyState());
+      setSummary(current.query, current.restored ? '지난 검색 · 0개' : '0개', '', scope);
+      list.append(scoped ? scopedEmptyState(current.filter) : emptyState());
       return;
     }
     tools.hidden = false;
     const rows = visibleResults();
     let text = rows.length + '개';
-    if (rows.length !== current.results.length) { text += ' / ' + current.results.length; }
     // mock 결과는 검색어와 상관없는 샘플 — 짧게, 자세한 설명은 마우스 올리면
     if (mode.mock) { text = 'mock ' + text; }
     setSummary(current.query, text,
-      (current.restored ? '지난 검색 결과입니다. ' : '') + (mode.mock ? 'mock 모드라서 검색어와 상관없이 같은 샘플이 나옵니다' : ''));
+      (current.restored ? '지난 검색 결과입니다. ' : '') + (mode.mock ? 'mock 모드라서 검색어와 상관없이 같은 샘플이 나옵니다' : ''), scope);
 
-    if (!rows.length) {
-      const s = el('div', 'state');
-      s.append(el('strong', '', '필터에 맞는 결과가 없습니다'));
-      const btns = el('div', 'btns');
-      btns.append(sbtn('필터 해제', false, function () { filter = { lang: '', proj: '' }; fLang.value = ''; fProj.value = ''; renderResults(); }));
-      s.append(btns);
-      list.append(s);
-      return;
-    }
     rows.forEach(function (r, i) {
       if (prefs.view === 'compact') {
         list.append(compactRow(r, i));
@@ -1675,6 +1960,21 @@ function getHtml(webview: vscode.Webview): string {
         list.append(card(r, i));
       }
     });
+  }
+
+  // F-2. 범위 때문에 결과 없음 — 조건을 풀어서 바로 다시
+  function scopedEmptyState(f) {
+    const s = el('div', 'state');
+    s.append(icon('empty'), el('strong', '', '이 범위에는 결과가 없어요'),
+      el('div', '', scopeLabel(f) + ' 에 맞는 코드가 없거나, 아직 검색 준비가 안 됐어요.'));
+    const btns = el('div', 'btns');
+    btns.append(sbtn('조건 풀고 전체에서 검색', true, function () { fClearBtn.click(); }));
+    if (f.project && f.language) {
+      btns.append(sbtn('언어만 풀기', false, function () { setFilter('language', ''); }));
+      btns.append(sbtn('프로젝트만 풀기', false, function () { setFilter('project', ''); }));
+    }
+    s.append(btns);
+    return s;
   }
 
   // F. 결과 없음
@@ -1696,7 +1996,7 @@ function getHtml(webview: vscode.Webview): string {
   function showError(title, detail, kind) {
     current = null;
     tools.hidden = true;
-    filtersBox.hidden = true;
+    fWarn.hidden = true;
     summary.textContent = '';
     const warn = kind === 'timeout';
     const box = el('div', warn ? 'error warn' : 'error');
@@ -2245,8 +2545,9 @@ function getHtml(webview: vscode.Webview): string {
     return head;
   }
 
+  // AI 질문은 범위(프로젝트·언어)를 보내지 않는다 — 걸려 있으면 분명히 알린다
   function scopeText() {
-    return '전체 DB 대상 · 화면 필터는 적용 안 됨';
+    return filterOn(sfilter) ? 'AI 질문은 범위(' + scopeLabel(sfilter) + ') 없이 전체 DB 대상' : '전체 DB 대상';
   }
 
   // 이어서 묻기 중이면 앞 대화를 한 줄씩. withNewChat: 마지막 줄 오른쪽에 "새 대화"
@@ -2347,6 +2648,11 @@ function getHtml(webview: vscode.Webview): string {
     const label = msg.cached ? '저장됨 · ' + agoText(msg.cached.time) : insufficient ? '근거 부족' : '답변 완료';
     const cls = msg.cached ? 'saved' : insufficient ? 'warn' : 'ok';
     const parts = [answerHead(label, cls, msg.q, { copy: true, keys: true, regen: !!msg.cached })];
+    if (filterOn(sfilter)) {
+      const pill = el('span', 'achip saved', '범위 무시 · 전체 DB');
+      pill.title = 'AI 질문에는 프로젝트·언어 범위를 적용하지 않아요';
+      parts[0].querySelector('.achip').after(pill);
+    }
     parts.push.apply(parts, prevLines(base, true));
     parts.push(el('div', 'aq', '질문: ' + msg.q));
 
@@ -2624,6 +2930,7 @@ function getHtml(webview: vscode.Webview): string {
   }
 
   renderHistory();
+  renderChips();
   // 준비됐다고 알리면 확장 본체가 설정·최근 검색어·저장 기록·지난 검색을 보내준다
   vscode.postMessage({ type: 'ready' });
 </script>

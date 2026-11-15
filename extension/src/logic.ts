@@ -254,6 +254,23 @@ export function askErrorFor(httpStatus: number, detail: string): AskError {
 }
 
 const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v);
+
+// 오류 응답의 detail → 보여줄 글자
+//   문자열 / {code, message} (POST /ask 계약) / FastAPI 검증 오류 배열 [{msg}] 모두 받는다
+export function errorDetailText(body: unknown): string {
+  const d = body && typeof body === 'object' ? (body as { detail?: unknown }).detail : undefined;
+  if (typeof d === 'string') {
+    return d;
+  }
+  if (d && typeof d === 'object' && !Array.isArray(d) && typeof (d as { message?: unknown }).message === 'string') {
+    return (d as { message: string }).message;
+  }
+  if (Array.isArray(d)) {
+    return d.map((x) => (x && typeof x === 'object' && typeof (x as { msg?: unknown }).msg === 'string' ? (x as { msg: string }).msg : ''))
+      .filter(Boolean).join(' / ');
+  }
+  return '';
+}
 const isStrOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
 
 function readSource(v: unknown, i: number): AskSource {
@@ -293,10 +310,7 @@ export function parseAskResponse(text: string, httpStatus = 200): AskResponse {
     value = undefined;
   }
   if (httpStatus !== 200) {
-    const detail = value && typeof value === 'object' && typeof (value as { detail?: unknown }).detail === 'string'
-      ? (value as { detail: string }).detail
-      : '';
-    throw askErrorFor(httpStatus, detail);
+    throw askErrorFor(httpStatus, errorDetailText(value));
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new AskError('format', '응답 형식 오류', `JSON 객체가 아닙니다: ${text.slice(0, 200)}`);
@@ -484,6 +498,93 @@ export function isVagueQuestion(q: string): boolean {
     '해줘', '어떻게', '좀', 'code', 'function', 'this', 'that', 'it', 'is', 'the', 'what', 'explain', 'how', 'does'];
   const words = q.toLowerCase().replace(/[?？!.,~]/g, ' ').split(/\s+/).filter(function (w) { return w.length > 0; });
   return words.every(function (w) { return filler.indexOf(w) >= 0; });
+}
+
+// ── 10. 검색 필터 — GET /search?project=&language= · GET /filters (팀 합의 #38 #39 #40)
+//    project: 저장된 이름 그대로(대소문자 구분) · language: 소문자 · 빈 값 = 조건 없음 · 둘 다면 AND
+//    서버는 실제 적용한 조건을 응답 filters 로 돌려준다. 없으면 옛 서버라 조건이 무시된 것
+export interface SearchFilter {
+  project: string;
+  language: string;
+}
+export const FILTER_MAX_LENGTH = 200;
+
+export function normalizeFilter(f: Partial<SearchFilter> | null | undefined): SearchFilter {
+  const project = typeof f?.project === 'string' ? f.project.trim() : '';
+  const language = typeof f?.language === 'string' ? f.language.trim().toLowerCase() : '';
+  return { project, language };
+}
+export function hasFilter(f: SearchFilter): boolean {
+  return f.project !== '' || f.language !== '';
+}
+
+// GET /search 주소. 조건은 있을 때만 붙인다 (없으면 예전 주소와 똑같다)
+export function buildSearchUrl(baseUrl: string, q: string, limit: number, filter: SearchFilter): string {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  if (filter.project) {
+    params.set('project', filter.project);
+  }
+  if (filter.language) {
+    params.set('language', filter.language);
+  }
+  return `${baseUrl.replace(/\/+$/, '')}/search?${params.toString()}`;
+}
+
+// 서버가 조건을 진짜 적용했는지
+//   applied: 요청한 조건이 응답 filters 와 같음 / none: 조건 없이 검색 / ignored: 조건을 보냈는데 서버가 안 돌려줌(옛 서버)·다름
+export type FilterCheck = 'applied' | 'none' | 'ignored';
+export function checkAppliedFilter(requested: SearchFilter, responseFilters: unknown): FilterCheck {
+  if (!hasFilter(requested)) {
+    return 'none';
+  }
+  if (!responseFilters || typeof responseFilters !== 'object') {
+    return 'ignored';
+  }
+  const got = normalizeFilter({
+    project: (responseFilters as { project?: unknown }).project as string | undefined,
+    language: (responseFilters as { language?: unknown }).language as string | undefined,
+  });
+  return got.project === requested.project && got.language === requested.language ? 'applied' : 'ignored';
+}
+
+// 서버가 조건을 무시했을 때 화면에서라도 거른다 (표시는 "화면에서만 거름")
+export function filterLocally<T extends { project_name: string | null; language: string }>(rows: T[], f: SearchFilter): T[] {
+  return rows.filter((r) => (!f.project || r.project_name === f.project) && (!f.language || r.language.toLowerCase() === f.language));
+}
+
+// GET /filters → { projects: [{name, count}], languages: [{name, count}] }  (이름 배열만 와도 된다)
+export interface FilterOption {
+  name: string;
+  count: number | null;
+}
+export interface FilterOptions {
+  projects: FilterOption[];
+  languages: FilterOption[];
+}
+export function parseFilterOptions(text: string): FilterOptions {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`JSON 이 아닙니다: ${text.slice(0, 120)}`);
+  }
+  const read = (key: 'projects' | 'languages'): FilterOption[] => {
+    const list = data && typeof data === 'object' ? (data as Record<string, unknown>)[key] : undefined;
+    if (!Array.isArray(list)) {
+      throw new Error(`${key} 배열이 없습니다`);
+    }
+    const out: FilterOption[] = [];
+    for (const v of list) {
+      const name = typeof v === 'string' ? v : v && typeof v === 'object' ? (v as { name?: unknown }).name : undefined;
+      const count = v && typeof v === 'object' ? (v as { count?: unknown }).count : undefined;
+      if (typeof name !== 'string' || !name.trim() || out.some((o) => o.name === name)) {
+        continue;   // 빈 이름·중복은 건너뛴다
+      }
+      out.push({ name, count: isInt(count) && count >= 0 ? count : null });
+    }
+    return out;
+  };
+  return { projects: read('projects'), languages: read('languages') };
 }
 
 // ── 8. 기타
