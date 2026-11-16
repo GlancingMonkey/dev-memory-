@@ -1,7 +1,7 @@
 // logic.ts 단위 테스트 — VS Code 없이 돌아간다: npm run test:unit
 import * as assert from 'assert';
 import {
-  addUsage, adjustEndLine, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
+  addUsage, adjustEndLine, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
 } from '../logic';
 
 const linesOf = (src: string) => {
@@ -312,6 +312,58 @@ suite('AI 질문 부가 기능 — 이어서 묻기 · 한 글자씩 · 저장�
     }
     for (const q of ['정렬하는 함수 어떻게 동작해?', 'add 함수는 뭘 반환해?', '두 숫자 더하는 함수 설명해줘 ?', '']) {
       assert.strictEqual(isVagueQuestion(q), false, q);
+    }
+  });
+});
+
+suite('검색 필터 — GET /search?project=&language= · GET /filters', () => {
+  test('조건 정리: 앞뒤 공백 제거, 언어만 소문자, 빈 값 = 조건 없음', () => {
+    assert.deepStrictEqual(normalizeFilter({ project: '  My-Proj ', language: ' Python ' }), { project: 'My-Proj', language: 'python' });
+    assert.strictEqual(hasFilter(normalizeFilter({ project: '   ', language: '' })), false);
+    assert.strictEqual(hasFilter(normalizeFilter(undefined)), false);
+  });
+  test('주소: 조건 없으면 예전과 같고, 있으면 붙인다 (한글·공백 인코딩)', () => {
+    const none = normalizeFilter({});
+    assert.strictEqual(buildSearchUrl('http://h:8000/', '정렬 함수', 10, none), 'http://h:8000/search?q=%EC%A0%95%EB%A0%AC+%ED%95%A8%EC%88%98&limit=10');
+    const u = new URL(buildSearchUrl('http://h:8000', 'a', 5, normalizeFilter({ project: 'demo project', language: 'Python' })));
+    assert.strictEqual(u.searchParams.get('project'), 'demo project');
+    assert.strictEqual(u.searchParams.get('language'), 'python');
+  });
+  test('서버가 조건을 적용했는지: filters 를 돌려주면 applied, 없거나 다르면 ignored', () => {
+    const f = normalizeFilter({ project: 'p', language: 'python' });
+    assert.strictEqual(checkAppliedFilter(f, { project: 'p', language: 'python' }), 'applied');
+    assert.strictEqual(checkAppliedFilter(f, undefined), 'ignored');
+    assert.strictEqual(checkAppliedFilter(f, { project: 'p', language: null }), 'ignored');
+    assert.strictEqual(checkAppliedFilter(normalizeFilter({}), undefined), 'none');
+    assert.strictEqual(checkAppliedFilter(normalizeFilter({ language: 'python' }), { project: null, language: 'Python' }), 'applied');
+  });
+  test('화면에서만 거르기 (옛 서버 대비)', () => {
+    const rows = [{ project_name: 'a', language: 'python' }, { project_name: 'b', language: 'Python' }, { project_name: 'a', language: 'go' }];
+    assert.strictEqual(filterLocally(rows, normalizeFilter({ project: 'a' })).length, 2);
+    assert.strictEqual(filterLocally(rows, normalizeFilter({ language: 'python' })).length, 2);
+    assert.strictEqual(filterLocally(rows, normalizeFilter({ project: 'a', language: 'python' })).length, 1);
+  });
+  test('/filters: {name,count} 또는 이름 배열, 빈 이름·중복은 건너뜀', () => {
+    const a = parseFilterOptions(JSON.stringify({ projects: [{ name: 'p1', count: 3 }, { name: 'p1', count: 1 }, { name: '' }], languages: ['python', 'go'] }));
+    assert.deepStrictEqual(a.projects, [{ name: 'p1', count: 3 }]);
+    assert.deepStrictEqual(a.languages, [{ name: 'python', count: null }, { name: 'go', count: null }]);
+    assert.throws(() => parseFilterOptions('{"projects":[]}'));
+    assert.throws(() => parseFilterOptions('<html>'));
+  });
+  test('오류 detail: 문자열 · {code,message} · FastAPI 검증 배열', () => {
+    assert.strictEqual(errorDetailText({ detail: '검색 질문을 입력해주세요.' }), '검색 질문을 입력해주세요.');
+    assert.strictEqual(errorDetailText({ detail: { code: 'ask_timeout', message: '시간 초과' } }), '시간 초과');
+    assert.strictEqual(errorDetailText({ detail: [{ msg: 'a' }, { msg: 'b' }] }), 'a / b');
+    assert.strictEqual(errorDetailText(null), '');
+  });
+  test('/ask 오류 detail 이 객체여도 메시지를 보여준다', () => {
+    try {
+      parseAskResponse(JSON.stringify({ detail: { code: 'ask_service_unavailable', message: 'AI 질문을 처리할 수 없습니다.' } }), 503);
+      assert.fail('throw 해야 함');
+    } catch (e) {
+      assert.ok(e instanceof AskError);
+      assert.strictEqual((e as AskError).kind, 'unavailable');
+      assert.strictEqual((e as AskError).detail, 'AI 질문을 처리할 수 없습니다.');
     }
   });
 });
