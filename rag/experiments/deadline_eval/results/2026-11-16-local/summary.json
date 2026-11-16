@@ -1,0 +1,55 @@
+{
+  "retrieval": {
+    "answerable_questions": 20,
+    "unsupported_questions": 5,
+    "hit_at_1_count": 7,
+    "hit_at_3_count": 18,
+    "unsupported_retrieval_nonempty_count": 5,
+    "search_median_seconds": 0.0793692959996406
+  },
+  "generation": {
+    "baseline": {
+      "attempt_records": 25,
+      "finished": 25,
+      "http_200": 25,
+      "answerable_expected_source_hit": 20,
+      "answerable_denominator": 20,
+      "unsupported_status_correct": 5,
+      "unsupported_denominator": 5,
+      "source_fields_match_database": 25,
+      "provider_usage_known_count": 25,
+      "provider_tokens": {
+        "input_tokens": 54277,
+        "output_tokens": 2637,
+        "total_tokens": 56914
+      },
+      "median_api_seconds": 4.893905572998847,
+      "content_accuracy": "Requires separate review; source-hit is not answer correctness"
+    },
+    "optimized": {
+      "attempt_records": 25,
+      "finished": 25,
+      "http_200": 24,
+      "answerable_expected_source_hit": 19,
+      "answerable_denominator": 20,
+      "unsupported_status_correct": 5,
+      "unsupported_denominator": 5,
+      "source_fields_match_database": 24,
+      "provider_usage_known_count": 25,
+      "provider_tokens": {
+        "input_tokens": 51885,
+        "output_tokens": 2675,
+        "total_tokens": 54560
+      },
+      "median_api_seconds": 4.686002256999927,
+      "content_accuracy": "Requires separate review; source-hit is not answer correctness"
+    }
+  },
+  "paired_success_count": 24,
+  "paired_reference_tokens_before": 39820,
+  "paired_reference_tokens_after": 37555,
+  "weighted_reference_saving_percent": 5.688096433952787,
+  "generation_blocked": false,
+  "database_preserved": true,
+  "note": "One observation per question/mode. Small curated dataset; no general superiority claim or UI timing."
+}

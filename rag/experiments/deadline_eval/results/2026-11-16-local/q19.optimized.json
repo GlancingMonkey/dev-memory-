@@ -1,0 +1,196 @@
+{
+  "state": "finished",
+  "query_id": "q19",
+  "mode": "optimized",
+  "question": "붙여넣는 코드의 들여쓰기를 현재 위치에 맞추는 방법",
+  "expected_status": "answered",
+  "expected_summary": "공통 앞 들여쓰기를 제거하고 첫 줄·빈 줄을 제외한 나머지 줄에 prefix를 붙인 뒤 지정한 eol로 결합한다.",
+  "http_status": 200,
+  "response": {
+    "status": "answered",
+    "answer": "제공된 코드에서는 `reindent(code, prefix, eol)`로 들여쓰기를 조정할 수 있습니다. `code`에는 붙여넣을 코드, `prefix`에는 현재 위치에 맞출 들여쓰기 문자열, `eol`에는 사용할 줄바꿈 문자를 전달합니다. [S4]\n\n처리 방식은 다음과 같습니다.\n- 비어 있지 않은 줄들의 최소 선행 공백 길이를 구해 각 줄에서 제거합니다. 따라서 코드 내부의 상대적인 들여쓰기는 유지됩니다.\n- 첫 줄을 제외한 비어 있지 않은 줄 앞에 `prefix`를 붙입니다.\n- 빈 줄은 공백 없는 빈 줄로 만들고, 결과를 `eol`로 연결합니다. [S4]\n\n첫 줄에는 `prefix`를 붙이지 않으므로, 삽입 위치 앞에 이미 있는 들여쓰기를 활용하는 방식입니다. 다만 현재 위치의 들여쓰기를 추출하거나 실제로 삽입하는 코드는 제공된 자료에서 확인되지 않습니다. [S4]",
+    "sources": [
+      {
+        "id": 13,
+        "project_name": "capstone-rag",
+        "file_path": "extension/src/logic.ts",
+        "language": "typescript",
+        "function_name": "reindent",
+        "start_line": 100,
+        "end_line": 113,
+        "code": "export function reindent(code: string, prefix: string, eol: string): string {\n  const lines = code.replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');\n  const widths = lines.filter((l) => l.trim().length > 0).map((l) => l.length - l.trimStart().length);\n  const common = widths.length ? Math.min(...widths) : 0;\n  return lines\n    .map((l, i) => {\n      const body = l.trim().length === 0 ? '' : l.slice(common);\n      if (i === 0 || body === '') {\n        return body;\n      }\n      return prefix + body;\n    })\n    .join(eol);\n}",
+        "score": 0.7797601222991943,
+        "citation_id": "S4"
+      }
+    ],
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 2240,
+      "output_tokens": 253,
+      "total_tokens": 2493
+    },
+    "history_used": 0
+  },
+  "api_seconds": 6.733270627999445,
+  "stage_seconds": {
+    "embedding": 0.06564468299984583,
+    "database_search": 0.021198156002355972,
+    "reference_count": 0.37058300400167354,
+    "input_count": 0.43345684000087203,
+    "generation": 5.8391673090009135
+  },
+  "token_count_calls": {
+    "reference": 1,
+    "input": 1
+  },
+  "candidate_rows": [
+    {
+      "id": 17,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "buildAskRequest",
+      "start_line": 379,
+      "end_line": 393,
+      "code": "export const HISTORY_SEND_MAX = 2;          // 서버로 보내는 이전 대화 수\nconst HISTORY_ANSWER_MAX = 1500;            // 이전 답변은 앞부분만 (요청이 너무 커지지 않게)\n\n// POST /ask 요청 본문. history 는 있을 때만, stream 은 true 일 때만 넣는다 (예전 서버와 그대로 호환)\nexport function buildAskRequest(q: string, limit: number, history: AskTurn[] = [], stream = false): Record<string, unknown> {\n  const body: Record<string, unknown> = { q, limit };\n  const recent = history.slice(-HISTORY_SEND_MAX).map((h) => ({ q: h.q, answer: h.answer.slice(0, HISTORY_ANSWER_MAX) }));\n  if (recent.length) {\n    body.history = recent;\n  }\n  if (stream) {\n    body.stream = true;\n  }\n  return body;\n}",
+      "score": 0.8223764896392822
+    },
+    {
+      "id": 1,
+      "project_name": "mvp-save-test",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "add",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def add(a, b):\r\n    return a + b",
+      "score": 0.783549964427948
+    },
+    {
+      "id": 12,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "adjustEndLine",
+      "start_line": 90,
+      "end_line": 95,
+      "code": "export function adjustEndLine(startLine: number, endLine: number, endCharacter: number): number {\n  if (endCharacter === 0 && endLine > startLine) {\n    return endLine - 1;\n  }\n  return endLine;\n}",
+      "score": 0.7811561226844788
+    },
+    {
+      "id": 13,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "reindent",
+      "start_line": 100,
+      "end_line": 113,
+      "code": "export function reindent(code: string, prefix: string, eol: string): string {\n  const lines = code.replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');\n  const widths = lines.filter((l) => l.trim().length > 0).map((l) => l.length - l.trimStart().length);\n  const common = widths.length ? Math.min(...widths) : 0;\n  return lines\n    .map((l, i) => {\n      const body = l.trim().length === 0 ? '' : l.slice(common);\n      if (i === 0 || body === '') {\n        return body;\n      }\n      return prefix + body;\n    })\n    .join(eol);\n}",
+      "score": 0.7797601222991943
+    },
+    {
+      "id": 15,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "askCacheKey",
+      "start_line": 434,
+      "end_line": 436,
+      "code": "export function askCacheKey(q: string): string {\n  return q.trim().replace(/[?？\\s]+$/, '').replace(/\\s+/g, ' ').toLowerCase();\n}",
+      "score": 0.777571439743042
+    },
+    {
+      "id": 10,
+      "project_name": "capstone-rag",
+      "file_path": "rag/context.py",
+      "language": "python",
+      "function_name": "render_context",
+      "start_line": 153,
+      "end_line": 162,
+      "code": "def render_context(sources: Sequence[ContextSource]) -> str:\n    \"\"\"Encode all fields without changing code line endings or indentation.\"\"\"\n    if not sources:\n        return \"\"\n    return json.dumps(\n        {\"sources\": [source.to_dict() for source in sources]},\n        ensure_ascii=False,\n        allow_nan=False,\n        indent=2,\n    )",
+      "score": 0.7740969888596833
+    },
+    {
+      "id": 14,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "extractCitations",
+      "start_line": 229,
+      "end_line": 237,
+      "code": "export function extractCitations(answer: string): string[] {\n  const seen: string[] = [];\n  for (const m of answer.matchAll(/\\[(S\\d+)\\]/g)) {\n    if (!seen.includes(m[1])) {\n      seen.push(m[1]);\n    }\n  }\n  return seen;\n}",
+      "score": 0.7704415321350098
+    },
+    {
+      "id": 16,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "clamp",
+      "start_line": 495,
+      "end_line": 498,
+      "code": "export function clamp(value: unknown, min: number, max: number, fallback: number): number {\n  const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback;\n  return Math.min(max, Math.max(min, n));\n}",
+      "score": 0.7693739762715693
+    },
+    {
+      "id": 4,
+      "project_name": "backend-api-regression",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "multiply",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def multiply(a, b):\n    return a * b",
+      "score": 0.7671881456859039
+    },
+    {
+      "id": 9,
+      "project_name": "capstone-rag",
+      "file_path": "backend/llm.py",
+      "language": "python",
+      "function_name": "_remaining",
+      "start_line": 59,
+      "end_line": 63,
+      "code": "def _remaining(deadline: float) -> float:\n    remaining = deadline - monotonic()\n    if remaining <= 0:\n        raise LLMTimeoutError\n    return remaining",
+      "score": 0.7602728891047426
+    }
+  ],
+  "selected_ids": [
+    17,
+    1,
+    12,
+    13,
+    15,
+    10,
+    14,
+    16,
+    4,
+    9
+  ],
+  "exclusions": [],
+  "reference_tokens": 1729,
+  "full_input_tokens": 2240,
+  "generation_called": true,
+  "provider_result": {
+    "answer": {
+      "status": "answered",
+      "answer": "제공된 코드에서는 `reindent(code, prefix, eol)`로 들여쓰기를 조정할 수 있습니다. `code`에는 붙여넣을 코드, `prefix`에는 현재 위치에 맞출 들여쓰기 문자열, `eol`에는 사용할 줄바꿈 문자를 전달합니다. [S4]\n\n처리 방식은 다음과 같습니다.\n- 비어 있지 않은 줄들의 최소 선행 공백 길이를 구해 각 줄에서 제거합니다. 따라서 코드 내부의 상대적인 들여쓰기는 유지됩니다.\n- 첫 줄을 제외한 비어 있지 않은 줄 앞에 `prefix`를 붙입니다.\n- 빈 줄은 공백 없는 빈 줄로 만들고, 결과를 `eol`로 연결합니다. [S4]\n\n첫 줄에는 `prefix`를 붙이지 않으므로, 삽입 위치 앞에 이미 있는 들여쓰기를 활용하는 방식입니다. 다만 현재 위치의 들여쓰기를 추출하거나 실제로 삽입하는 코드는 제공된 자료에서 확인되지 않습니다. [S4]",
+      "citation_ids": [
+        "S4"
+      ]
+    },
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 2240,
+      "output_tokens": 253,
+      "total_tokens": 2493
+    }
+  },
+  "source_fields_match_database": true,
+  "quality_review": null,
+  "expected_ids": [
+    13
+  ],
+  "expected_source_hit": true,
+  "same_retrieved_candidates": true
+}

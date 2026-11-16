@@ -1,0 +1,1241 @@
+{
+  "state": "finished",
+  "query_id": "q11",
+  "http_status": 200,
+  "api_seconds": 6.230976400001964,
+  "events": [
+    {
+      "event": "sources",
+      "data": {
+        "sources": [
+          {
+            "citation_id": "S1",
+            "id": 17,
+            "project_name": "capstone-rag",
+            "file_path": "extension/src/logic.ts",
+            "language": "typescript",
+            "function_name": "buildAskRequest",
+            "start_line": 379,
+            "end_line": 393,
+            "code": "export const HISTORY_SEND_MAX = 2;          // 서버로 보내는 이전 대화 수\nconst HISTORY_ANSWER_MAX = 1500;            // 이전 답변은 앞부분만 (요청이 너무 커지지 않게)\n\n// POST /ask 요청 본문. history 는 있을 때만, stream 은 true 일 때만 넣는다 (예전 서버와 그대로 호환)\nexport function buildAskRequest(q: string, limit: number, history: AskTurn[] = [], stream = false): Record<string, unknown> {\n  const body: Record<string, unknown> = { q, limit };\n  const recent = history.slice(-HISTORY_SEND_MAX).map((h) => ({ q: h.q, answer: h.answer.slice(0, HISTORY_ANSWER_MAX) }));\n  if (recent.length) {\n    body.history = recent;\n  }\n  if (stream) {\n    body.stream = true;\n  }\n  return body;\n}",
+            "score": 0.8492003769159108
+          },
+          {
+            "citation_id": "S2",
+            "id": 14,
+            "project_name": "capstone-rag",
+            "file_path": "extension/src/logic.ts",
+            "language": "typescript",
+            "function_name": "extractCitations",
+            "start_line": 229,
+            "end_line": 237,
+            "code": "export function extractCitations(answer: string): string[] {\n  const seen: string[] = [];\n  for (const m of answer.matchAll(/\\[(S\\d+)\\]/g)) {\n    if (!seen.includes(m[1])) {\n      seen.push(m[1]);\n    }\n  }\n  return seen;\n}",
+            "score": 0.8353707292455015
+          },
+          {
+            "citation_id": "S3",
+            "id": 13,
+            "project_name": "capstone-rag",
+            "file_path": "extension/src/logic.ts",
+            "language": "typescript",
+            "function_name": "reindent",
+            "start_line": 100,
+            "end_line": 113,
+            "code": "export function reindent(code: string, prefix: string, eol: string): string {\n  const lines = code.replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');\n  const widths = lines.filter((l) => l.trim().length > 0).map((l) => l.length - l.trimStart().length);\n  const common = widths.length ? Math.min(...widths) : 0;\n  return lines\n    .map((l, i) => {\n      const body = l.trim().length === 0 ? '' : l.slice(common);\n      if (i === 0 || body === '') {\n        return body;\n      }\n      return prefix + body;\n    })\n    .join(eol);\n}",
+            "score": 0.8159638156912451
+          },
+          {
+            "citation_id": "S4",
+            "id": 4,
+            "project_name": "backend-api-regression",
+            "file_path": "sample.py",
+            "language": "python",
+            "function_name": "multiply",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def multiply(a, b):\n    return a * b",
+            "score": 0.8116885648145002
+          },
+          {
+            "citation_id": "S5",
+            "id": 1,
+            "project_name": "mvp-save-test",
+            "file_path": "sample.py",
+            "language": "python",
+            "function_name": "add",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def add(a, b):\r\n    return a + b",
+            "score": 0.8091634029648674
+          },
+          {
+            "citation_id": "S6",
+            "id": 15,
+            "project_name": "capstone-rag",
+            "file_path": "extension/src/logic.ts",
+            "language": "typescript",
+            "function_name": "askCacheKey",
+            "start_line": 434,
+            "end_line": 436,
+            "code": "export function askCacheKey(q: string): string {\n  return q.trim().replace(/[?？\\s]+$/, '').replace(/\\s+/g, ' ').toLowerCase();\n}",
+            "score": 0.8071766610636332
+          },
+          {
+            "citation_id": "S7",
+            "id": 6,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "safe_divide.py",
+            "language": "python",
+            "function_name": "safe_divide",
+            "start_line": 1,
+            "end_line": 4,
+            "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+            "score": 0.803822409878827
+          },
+          {
+            "citation_id": "S9",
+            "id": 12,
+            "project_name": "capstone-rag",
+            "file_path": "extension/src/logic.ts",
+            "language": "typescript",
+            "function_name": "adjustEndLine",
+            "start_line": 90,
+            "end_line": 95,
+            "code": "export function adjustEndLine(startLine: number, endLine: number, endCharacter: number): number {\n  if (endCharacter === 0 && endLine > startLine) {\n    return endLine - 1;\n  }\n  return endLine;\n}",
+            "score": 0.79733939186696
+          },
+          {
+            "citation_id": "S10",
+            "id": 10,
+            "project_name": "capstone-rag",
+            "file_path": "rag/context.py",
+            "language": "python",
+            "function_name": "render_context",
+            "start_line": 153,
+            "end_line": 162,
+            "code": "def render_context(sources: Sequence[ContextSource]) -> str:\n    \"\"\"Encode all fields without changing code line endings or indentation.\"\"\"\n    if not sources:\n        return \"\"\n    return json.dumps(\n        {\"sources\": [source.to_dict() for source in sources]},\n        ensure_ascii=False,\n        allow_nan=False,\n        indent=2,\n    )",
+            "score": 0.7948010923027699
+          }
+        ]
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "`"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "extension"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "/src"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "/"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "logic"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": ".ts"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "`"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "의"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " `"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "extract"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "C"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "itations"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "(answer"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": ":"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " string"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "):"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " string"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "[]"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "`"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 함수"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "가"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 해당"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 기능"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "을"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 구현"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "합니다"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "."
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " ["
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "S"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "2"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "]"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "```"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "typescript"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "export"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " function"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " extract"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "C"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "itations"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "(answer"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": ":"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " string"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "):"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " string"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "[]"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " {"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " "
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " const"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " seen"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": ":"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " string"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "[]"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " ="
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " []"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": ";"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " "
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " for"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " ("
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "const"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " m"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " of"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " answer"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": ".match"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "All"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "(/"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\\"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "[("
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "S"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\\"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "d"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "+)"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\\"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "]/"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "g"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "))"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " {"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "   "
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " if"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " (!"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "seen"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": ".includes"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "(m"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "["
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "1"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "]))"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " {"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "     "
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " seen"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": ".push"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "(m"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "["
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "1"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "]);"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "   "
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " }"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " "
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " }"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " "
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " return"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " seen"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": ";"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "}"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "``"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "`"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "답"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "변"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "에서"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 대"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "괄"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "호"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "로"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 감"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "싼"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " S"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "와"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 숫"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "자"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 형태"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "를"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 등장"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 순"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "서"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "대로"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 찾"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "고"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": ","
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 이미"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 수"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "집"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "한"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 값"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "은"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 제외"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "합니다"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "."
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 반환"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "값"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "은"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 대"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "괄"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "호"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 없는"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " S"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "1"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": ","
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " S"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "2"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 같은"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 문자열"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 배열"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "이며"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": ","
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 최초"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 등장"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 순"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "서"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "가"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " 유지"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "됩니다"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "."
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": " ["
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "S"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "2"
+      }
+    },
+    {
+      "event": "delta",
+      "data": {
+        "text": "]"
+      }
+    },
+    {
+      "event": "done",
+      "data": {
+        "status": "answered",
+        "answer": "`extension/src/logic.ts`의 `extractCitations(answer: string): string[]` 함수가 해당 기능을 구현합니다. [S2]\n\n```typescript\nexport function extractCitations(answer: string): string[] {\n  const seen: string[] = [];\n  for (const m of answer.matchAll(/\\[(S\\d+)\\]/g)) {\n    if (!seen.includes(m[1])) {\n      seen.push(m[1]);\n    }\n  }\n  return seen;\n}\n```\n\n답변에서 대괄호로 감싼 S와 숫자 형태를 등장 순서대로 찾고, 이미 수집한 값은 제외합니다. 반환값은 대괄호 없는 S1, S2 같은 문자열 배열이며, 최초 등장 순서가 유지됩니다. [S2]",
+        "sources": [
+          {
+            "id": 14,
+            "project_name": "capstone-rag",
+            "file_path": "extension/src/logic.ts",
+            "language": "typescript",
+            "function_name": "extractCitations",
+            "start_line": 229,
+            "end_line": 237,
+            "code": "export function extractCitations(answer: string): string[] {\n  const seen: string[] = [];\n  for (const m of answer.matchAll(/\\[(S\\d+)\\]/g)) {\n    if (!seen.includes(m[1])) {\n      seen.push(m[1]);\n    }\n  }\n  return seen;\n}",
+            "score": 0.8353707292455015,
+            "citation_id": "S2"
+          }
+        ],
+        "model": "gpt-6.1-sol",
+        "usage": {
+          "input_tokens": 2119,
+          "output_tokens": 204,
+          "total_tokens": 2323
+        },
+        "history_used": 0
+      }
+    }
+  ],
+  "response": {
+    "status": "answered",
+    "answer": "`extension/src/logic.ts`의 `extractCitations(answer: string): string[]` 함수가 해당 기능을 구현합니다. [S2]\n\n```typescript\nexport function extractCitations(answer: string): string[] {\n  const seen: string[] = [];\n  for (const m of answer.matchAll(/\\[(S\\d+)\\]/g)) {\n    if (!seen.includes(m[1])) {\n      seen.push(m[1]);\n    }\n  }\n  return seen;\n}\n```\n\n답변에서 대괄호로 감싼 S와 숫자 형태를 등장 순서대로 찾고, 이미 수집한 값은 제외합니다. 반환값은 대괄호 없는 S1, S2 같은 문자열 배열이며, 최초 등장 순서가 유지됩니다. [S2]",
+    "sources": [
+      {
+        "id": 14,
+        "project_name": "capstone-rag",
+        "file_path": "extension/src/logic.ts",
+        "language": "typescript",
+        "function_name": "extractCitations",
+        "start_line": 229,
+        "end_line": 237,
+        "code": "export function extractCitations(answer: string): string[] {\n  const seen: string[] = [];\n  for (const m of answer.matchAll(/\\[(S\\d+)\\]/g)) {\n    if (!seen.includes(m[1])) {\n      seen.push(m[1]);\n    }\n  }\n  return seen;\n}",
+        "score": 0.8353707292455015,
+        "citation_id": "S2"
+      }
+    ],
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 2119,
+      "output_tokens": 204,
+      "total_tokens": 2323
+    },
+    "history_used": 0
+  },
+  "delta_matches_completed_answer": true,
+  "source_fields_match_database": true,
+  "prompt_sha256": "cc8503cc511ac2782cbf858c313a3b657514223e8f3eab89a062236a5a5bb257"
+}

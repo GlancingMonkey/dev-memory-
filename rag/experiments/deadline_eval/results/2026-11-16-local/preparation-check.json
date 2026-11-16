@@ -1,0 +1,203 @@
+{
+  "mode": "apply",
+  "actions": [
+    {
+      "sample_id": "add",
+      "action": "existing",
+      "ids": [
+        1
+      ]
+    },
+    {
+      "sample_id": "even_numbers",
+      "action": "existing",
+      "ids": [
+        2
+      ]
+    },
+    {
+      "sample_id": "sort_users",
+      "action": "existing",
+      "ids": [
+        3,
+        5
+      ]
+    },
+    {
+      "sample_id": "safe_divide",
+      "action": "existing",
+      "ids": [
+        6,
+        8
+      ]
+    },
+    {
+      "sample_id": "multiply",
+      "action": "retried_existing_id",
+      "id": 4
+    },
+    {
+      "sample_id": "remaining",
+      "action": "post",
+      "http": 200,
+      "response": {
+        "id": 9,
+        "message": "snippet saved",
+        "embedding_status": "ready",
+        "embedding_error": null
+      }
+    },
+    {
+      "sample_id": "render_context",
+      "action": "post",
+      "http": 200,
+      "response": {
+        "id": 10,
+        "message": "snippet saved",
+        "embedding_status": "ready",
+        "embedding_error": null
+      }
+    },
+    {
+      "sample_id": "positive_int",
+      "action": "post",
+      "http": 200,
+      "response": {
+        "id": 11,
+        "message": "snippet saved",
+        "embedding_status": "ready",
+        "embedding_error": null
+      }
+    },
+    {
+      "sample_id": "adjust_end_line",
+      "action": "post",
+      "http": 200,
+      "response": {
+        "id": 12,
+        "message": "snippet saved",
+        "embedding_status": "ready",
+        "embedding_error": null
+      }
+    },
+    {
+      "sample_id": "reindent",
+      "action": "post",
+      "http": 200,
+      "response": {
+        "id": 13,
+        "message": "snippet saved",
+        "embedding_status": "ready",
+        "embedding_error": null
+      }
+    },
+    {
+      "sample_id": "extract_citations",
+      "action": "post",
+      "http": 200,
+      "response": {
+        "id": 14,
+        "message": "snippet saved",
+        "embedding_status": "ready",
+        "embedding_error": null
+      }
+    },
+    {
+      "sample_id": "ask_cache_key",
+      "action": "post",
+      "http": 200,
+      "response": {
+        "id": 15,
+        "message": "snippet saved",
+        "embedding_status": "ready",
+        "embedding_error": null
+      }
+    },
+    {
+      "sample_id": "clamp",
+      "action": "post",
+      "http": 200,
+      "response": {
+        "id": 16,
+        "message": "snippet saved",
+        "embedding_status": "ready",
+        "embedding_error": null
+      }
+    },
+    {
+      "sample_id": "build_ask_request",
+      "action": "post",
+      "http": 200,
+      "response": {
+        "id": 17,
+        "message": "snippet saved",
+        "embedding_status": "ready",
+        "embedding_error": null
+      }
+    }
+  ],
+  "rows_before": 8,
+  "rows_after": 17,
+  "original_code_metadata_and_existing_vectors_preserved": true,
+  "intentional_retry_ids": [
+    4
+  ],
+  "new_ids": [
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17
+  ],
+  "bindings": {
+    "add": [
+      1
+    ],
+    "even_numbers": [
+      2
+    ],
+    "sort_users": [
+      3,
+      5
+    ],
+    "safe_divide": [
+      6,
+      8
+    ],
+    "multiply": [
+      4
+    ],
+    "remaining": [
+      9
+    ],
+    "render_context": [
+      10
+    ],
+    "positive_int": [
+      11
+    ],
+    "adjust_end_line": [
+      12
+    ],
+    "reindent": [
+      13
+    ],
+    "extract_citations": [
+      14
+    ],
+    "ask_cache_key": [
+      15
+    ],
+    "clamp": [
+      16
+    ],
+    "build_ask_request": [
+      17
+    ]
+  },
+  "llm_generation_calls": 0
+}

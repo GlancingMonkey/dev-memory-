@@ -16,6 +16,7 @@
 
 | 하고 싶은 일 | 읽을 문서 |
 |---|---|
+| 18일 담당별 연결·재현·남은 확인 | [역할별 인수인계](HANDOFF_2026-11-18.md) |
 | API 요청·응답과 오류 규칙 확인 | [공식 API 계약](../API_CONTRACT.md) |
 | 기존 스니펫의 임베딩 재처리 | [RAG 재처리 안내](../rag/README.md) |
 | 단위 테스트와 실제 DB 시험 구분 | [테스트 안내](TESTING.md) |
@@ -26,6 +27,7 @@
 
 | 기록 | 담고 있는 내용 |
 |---|---|
+| [2026-11-16 Backend·RAG 검증](EVALUATION_2026-11-16.md) | 서버 검색 조건·Context 최적화·실제 코드 25개 질문 평가와 한계 |
 | [2026-11-05 통합 검증](INTEGRATION_TEST_2026-11-05.md) | 자동 임베딩 저장, 입력 한도 실패 보존, develop 병합 후 API·UI 대조와 복구 |
 | [2026-10-28 통합 검증](INTEGRATION_TEST_2026-10-28.md) | 당시 수동으로 벡터를 준비한 의미 검색 연결 기록 |
 | [Embedding 비교 결과](../rag/experiments/embedding_compare/comparison_results.md) | CPU·10개 질문의 세 모델 비교와 제한점 |

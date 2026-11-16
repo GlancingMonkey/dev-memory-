@@ -62,7 +62,7 @@ class RagContextTests(unittest.TestCase):
         self.assertEqual(context.sources[0].code, before[0]["code"])
 
     def test_budget_skips_whole_large_source_then_uses_later_fit(self):
-        rows = [snippet(91), snippet(12), snippet(35)]
+        rows = [snippet(91), snippet(12, code='return 12'), snippet(35, code='return 35')]
         context = build_context(
             rows,
             count_tokens=synthetic_count({91: 4, 12: 50, 35: 5}),
@@ -143,6 +143,7 @@ class RagContextTests(unittest.TestCase):
         context = build_context(
             [snippet(17), snippet(22, file_path="other/add.py")],
             count_tokens=synthetic_count({17: 2, 22: 2}),
+            deduplicate=False,
         )
         self.assertEqual([source.id for source in context.sources], [17, 22])
         self.assertEqual(
@@ -226,6 +227,65 @@ class RagContextTests(unittest.TestCase):
         user_payload = json.loads(messages[1]["content"])
         self.assertEqual(user_payload["question"], "이어서 설명해줘")
         self.assertEqual(user_payload["history"], history)
+
+    def test_exact_duplicates_normalize_line_endings_but_preserve_originals(self):
+        rows = [
+            snippet(17),
+            snippet(22, file_path="other/add.py", code=snippet()["code"].replace("\r\n", "\n")),
+            snippet(35, code="def subtract(a, b):\n    return a - b"),
+        ]
+        before = copy.deepcopy(rows)
+        counter = Mock(wraps=synthetic_count({17: 2, 22: 2, 35: 2}))
+        context = build_context(rows, count_tokens=counter)
+        self.assertEqual([s.id for s in context.sources], [17, 35])
+        self.assertEqual([s.citation_id for s in context.sources], ["S1", "S3"])
+        self.assertEqual(context.sources[0].code, before[0]["code"])
+        self.assertEqual(rows, before)
+        self.assertEqual(context.skipped_ids, ())
+        self.assertEqual([(x.id, x.reason, x.representative_id) for x in context.exclusions],
+                         [(22, "duplicate", 17)])
+        self.assertEqual(counter.call_count, 1)
+        with self.assertRaises(ValueError):
+            context.cited_sources(["S2"])
+        self.assertEqual(context.cited_sources(["S3"])[0]["id"], 35)
+
+    def test_cross_project_or_language_sources_are_not_deduplicated(self):
+        rows = [snippet(17), snippet(22, project_name="another-project"),
+                snippet(35, language="typescript")]
+        context = build_context(rows, count_tokens=synthetic_count({17: 1, 22: 1, 35: 1}))
+        self.assertEqual([s.id for s in context.sources], [17, 22, 35])
+        self.assertEqual(context.exclusions, ())
+
+    def test_whitespace_comments_and_trailing_newline_are_not_normalized(self):
+        rows = [
+            snippet(17),
+            snippet(22, code=snippet()["code"] + "\n"),
+            snippet(35, code=snippet()["code"].replace("    return", "  return")),
+            snippet(46, code=snippet()["code"] + "  # explanation"),
+        ]
+        context = build_context(rows, count_tokens=synthetic_count({17: 1, 22: 1, 35: 1, 46: 1}))
+        self.assertEqual(len(context.sources), 4)
+        self.assertEqual(context.exclusions, ())
+
+    def test_later_duplicate_can_fit_when_first_metadata_is_too_large(self):
+        rows = [snippet(17, file_path="long/" * 100 + "add.py"), snippet(22),
+                snippet(35, code="return 2")]
+        context = build_context(rows, count_tokens=synthetic_count({17: 50, 22: 1, 35: 2}),
+                                token_budget=7)
+        self.assertEqual([s.id for s in context.sources], [22, 35])
+        self.assertEqual([s.citation_id for s in context.sources], ["S2", "S3"])
+        self.assertEqual(context.skipped_ids, (17,))
+        self.assertEqual([(x.id, x.reason) for x in context.exclusions], [(17, "budget")])
+        self.assertEqual(context.token_count, 6)
+
+    def test_citation_notation_is_reserved_for_real_source_references(self):
+        self.assertIn("기호 예시는 S1처럼 대괄호 없이", RAG_INSTRUCTIONS)
+        self.assertIn("citation_id만 인용", RAG_INSTRUCTIONS)
+
+    def test_invalid_deduplication_flag_is_rejected(self):
+        for flag in [None, 0, 1, "yes"]:
+            with self.subTest(flag=flag), self.assertRaises(ValueError):
+                build_context([snippet()], count_tokens=lambda _: 1, deduplicate=flag)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from pgvector.psycopg import register_vector
 from psycopg.rows import dict_row
 
 from backend.schemas.snippet import SnippetCreateRequest
+from backend.schemas.search import SearchFilters
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -54,6 +55,9 @@ def insert_snippet(snippet: SnippetCreateRequest) -> int:
 def search_snippets(
     query_vector: list[float],
     limit: int = 10,
+    *,
+    project: str | None = None,
+    language: str | None = None,
 ) -> list[dict]:
     if not 1 <= limit <= 20:
         raise ValueError("limit must be between 1 and 20")
@@ -67,24 +71,33 @@ def search_snippets(
     ):
         raise ValueError("query_vector must be finite and non-zero")
 
-    vector = Vector(query_vector)
+    filters = SearchFilters(project=project, language=language)
+    conditions = ["embedding IS NOT NULL", "vector_norm(embedding) > 0"]
+    params: list = [Vector(query_vector)]
+    if filters.project is not None:
+        conditions.append("btrim(project_name) = %s")
+        params.append(filters.project)
+    if filters.language is not None:
+        conditions.append("lower(btrim(language)) = %s")
+        params.append(filters.language)
+    where_sql = " AND ".join(conditions)
+    params.append(limit)
 
     with connect_db() as connection:
         register_vector(connection)
         connection.row_factory = dict_row
 
         rows = connection.execute(
-            """
+            f"""
             SELECT id, project_name, file_path, language, function_name,
                    start_line, end_line, code,
                    embedding <=> %s AS cosine_distance
             FROM public.snippets
-            WHERE embedding IS NOT NULL
-              AND vector_norm(embedding) > 0
+            WHERE {where_sql}
             ORDER BY cosine_distance ASC, id ASC
             LIMIT %s
             """,
-            (vector, limit),
+            tuple(params),
         ).fetchall()
 
     for row in rows:
@@ -217,3 +230,39 @@ def get_snippet_embedding_state(
         ).fetchone()
 
     return row
+
+
+def get_filter_options() -> dict[str, list[dict]]:
+    """현재 검색 가능한 스니펫의 프로젝트·언어별 행 수를 반환한다."""
+    with connect_db() as connection:
+        connection.execute("SET TRANSACTION READ ONLY")
+        connection.row_factory = dict_row
+        rows = connection.execute(
+            """
+            WITH searchable AS (
+                SELECT btrim(project_name) AS project_name,
+                       lower(btrim(language)) AS language
+                FROM public.snippets
+                WHERE embedding IS NOT NULL
+                  AND vector_norm(embedding) > 0
+            )
+            SELECT 'projects' AS kind, project_name AS name, COUNT(*) AS count
+            FROM searchable
+            WHERE project_name <> ''
+            GROUP BY project_name
+            UNION ALL
+            SELECT 'languages' AS kind, language AS name, COUNT(*) AS count
+            FROM searchable
+            WHERE language <> ''
+            GROUP BY language
+            ORDER BY kind ASC, name ASC
+            """
+        ).fetchall()
+
+    options: dict[str, list[dict]] = {"projects": [], "languages": []}
+    for row in rows:
+        options[row["kind"]].append({
+            "name": row["name"],
+            "count": row["count"],
+        })
+    return options

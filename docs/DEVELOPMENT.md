@@ -146,7 +146,7 @@ Application startup complete.
 warmup 실패가 있어도 서버 자체는 실행될 수 있으므로 두 로그를 함께 확인한다. Windows 브라우저에서는 다음을 확인한다.
 
 - [GET /health](http://127.0.0.1:8000/health): `{"status":"ok"}`
-- [Swagger](http://127.0.0.1:8000/docs): POST /snippets와 GET /search
+- [Swagger](http://127.0.0.1:8000/docs): POST /snippets, GET /search, GET /filters, POST /ask
 
 접속이 안 되면 Dev Container 창의 **포트** 탭에서 8000 포트의 실제 전달 주소를 확인한다. /health는 서버 실행 상태를 나타내며 DB 연결과 저장 성공은 별도로 확인한다. 루트 /의 404는 현재 등록된 라우트 기준 정상이다.
 
@@ -273,7 +273,7 @@ uv run --locked python -m rag.retry_embeddings --project "$retry_project" --id "
 
 ## 7. 실제 검색과 Extension 연결
 
-Backend의 E5 warmup 성공과 검색할 행의 ready·벡터 저장을 확인한 뒤 Windows Swagger의 GET /search에서 q와 limit을 입력한다. 같은 질문을 Extension에서도 검색해 연결을 대조한다.
+Backend의 E5 warmup 성공과 검색할 행의 ready·벡터 저장을 확인한 뒤 Windows Swagger의 GET /search에서 q와 limit을 입력한다. project·language를 지정하면 전체 DB 후보를 조건으로 좁힌 뒤 Top-K를 고르며 응답 filters로 적용 조건을 확인한다. 같은 질문·조건·limit을 Extension에서도 검색해 연결을 대조한다.
 
 | 질문 | 기대 함수 |
 |---|---|
@@ -313,3 +313,18 @@ Backend를 더 사용하지 않으면 실행 터미널에서 Ctrl+C로 종료한
 모델 비교 원본은 [기존 실험 폴더](../rag/experiments/embedding_compare/README.md)에 보존되어 있다. 추가 실행을 했다면 날짜·환경·SHA·실제 응답을 새 기록에 남긴다.
 
 [문서 목차](README.md) · [준비된 환경의 시연 순서](DEMO.md) · [자동·수동 테스트 안내](TESTING.md)
+
+
+## 8. AI 질문과 토큰 계수
+
+POST /ask는 기존 E5·DB 검색 결과를 참고 자료로 구성하고, 명시적인 AI 질문에만 LLM을 호출한다.
+저장·일반 검색·GET /filters는 LLM을 호출하지 않는다.
+실제 계수·생성에는 .env의 OPENAI_API_KEY가 필요하다. .env.example에는 이름만 있으며 키를 Git에 넣지 않는다.
+
+현재 /ask는 전체 DB를 검색하고 /search의 project·language 조건을 받지 않는다.
+JSON과 SSE의 완료·오류 규칙은 [공식 계약](../API_CONTRACT.md)을 따른다.
+답변의 출처는 DB 원문과 대조하고 모델이 만든 경로·줄 번호로 대체하지 않는다.
+
+참고 자료는 4000토큰, 최종 입력은 8000토큰 이내인지 실제 제공자 계수로 검사한다.
+E5의 512토큰 한도와 LLM 예산을 구분한다.
+검증과 전후 비교는 [평가 안내](../rag/experiments/deadline_eval/README.md)를 따른다.

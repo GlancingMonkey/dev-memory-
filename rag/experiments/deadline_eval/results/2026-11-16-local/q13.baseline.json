@@ -1,0 +1,196 @@
+{
+  "state": "finished",
+  "query_id": "q13",
+  "mode": "baseline",
+  "question": "숫자를 반올림한 다음 최솟값과 최댓값 사이로 제한하는 함수",
+  "expected_status": "answered",
+  "expected_summary": "유한 숫자를 반올림해 최소·최대 범위로 제한하고 숫자가 아니거나 유한하지 않으면 기본값을 쓴다.",
+  "http_status": 200,
+  "response": {
+    "status": "answered",
+    "answer": "해당 함수는 `clamp(value, min, max, fallback)`입니다. [S2]\n\n- `value`가 유한한 숫자이면 `Math.round`로 반올림합니다.\n- 숫자가 아니거나 유한하지 않으면 `fallback`을 사용합니다.\n- 그 결과를 `min` 이상, `max` 이하로 제한해 반환합니다. [S2]",
+    "sources": [
+      {
+        "id": 16,
+        "project_name": "capstone-rag",
+        "file_path": "extension/src/logic.ts",
+        "language": "typescript",
+        "function_name": "clamp",
+        "start_line": 495,
+        "end_line": 498,
+        "code": "export function clamp(value: unknown, min: number, max: number, fallback: number): number {\n  const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback;\n  return Math.min(max, Math.max(min, n));\n}",
+        "score": 0.8258747108541347,
+        "citation_id": "S2"
+      }
+    ],
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 2139,
+      "output_tokens": 109,
+      "total_tokens": 2248
+    },
+    "history_used": 0
+  },
+  "api_seconds": 5.097449955999764,
+  "stage_seconds": {
+    "embedding": 0.05460682299963082,
+    "database_search": 0.01663194299908355,
+    "reference_count": 0.4136381970020011,
+    "input_count": 1.0742059470030654,
+    "generation": 3.5358685799983505
+  },
+  "token_count_calls": {
+    "reference": 1,
+    "input": 1
+  },
+  "candidate_rows": [
+    {
+      "id": 17,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "buildAskRequest",
+      "start_line": 379,
+      "end_line": 393,
+      "code": "export const HISTORY_SEND_MAX = 2;          // 서버로 보내는 이전 대화 수\nconst HISTORY_ANSWER_MAX = 1500;            // 이전 답변은 앞부분만 (요청이 너무 커지지 않게)\n\n// POST /ask 요청 본문. history 는 있을 때만, stream 은 true 일 때만 넣는다 (예전 서버와 그대로 호환)\nexport function buildAskRequest(q: string, limit: number, history: AskTurn[] = [], stream = false): Record<string, unknown> {\n  const body: Record<string, unknown> = { q, limit };\n  const recent = history.slice(-HISTORY_SEND_MAX).map((h) => ({ q: h.q, answer: h.answer.slice(0, HISTORY_ANSWER_MAX) }));\n  if (recent.length) {\n    body.history = recent;\n  }\n  if (stream) {\n    body.stream = true;\n  }\n  return body;\n}",
+      "score": 0.8346917629241943
+    },
+    {
+      "id": 16,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "clamp",
+      "start_line": 495,
+      "end_line": 498,
+      "code": "export function clamp(value: unknown, min: number, max: number, fallback: number): number {\n  const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback;\n  return Math.min(max, Math.max(min, n));\n}",
+      "score": 0.8258747108541347
+    },
+    {
+      "id": 12,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "adjustEndLine",
+      "start_line": 90,
+      "end_line": 95,
+      "code": "export function adjustEndLine(startLine: number, endLine: number, endCharacter: number): number {\n  if (endCharacter === 0 && endLine > startLine) {\n    return endLine - 1;\n  }\n  return endLine;\n}",
+      "score": 0.8200935125350952
+    },
+    {
+      "id": 4,
+      "project_name": "backend-api-regression",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "multiply",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def multiply(a, b):\n    return a * b",
+      "score": 0.8129984847904169
+    },
+    {
+      "id": 11,
+      "project_name": "capstone-rag",
+      "file_path": "rag/context.py",
+      "language": "python",
+      "function_name": "_positive_int",
+      "start_line": 98,
+      "end_line": 101,
+      "code": "def _positive_int(value: object, name: str) -> int:\n    if type(value) is not int or value <= 0:\n        raise ValueError(f\"{name} must be a positive integer\")\n    return value",
+      "score": 0.8051183223724365
+    },
+    {
+      "id": 13,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "reindent",
+      "start_line": 100,
+      "end_line": 113,
+      "code": "export function reindent(code: string, prefix: string, eol: string): string {\n  const lines = code.replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');\n  const widths = lines.filter((l) => l.trim().length > 0).map((l) => l.length - l.trimStart().length);\n  const common = widths.length ? Math.min(...widths) : 0;\n  return lines\n    .map((l, i) => {\n      const body = l.trim().length === 0 ? '' : l.slice(common);\n      if (i === 0 || body === '') {\n        return body;\n      }\n      return prefix + body;\n    })\n    .join(eol);\n}",
+      "score": 0.8020765781402588
+    },
+    {
+      "id": 1,
+      "project_name": "mvp-save-test",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "add",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def add(a, b):\r\n    return a + b",
+      "score": 0.7940646409988403
+    },
+    {
+      "id": 2,
+      "project_name": "mvp-save-test",
+      "file_path": "even_numbers.py",
+      "language": "python",
+      "function_name": "even_numbers",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def even_numbers(values):\n    return [n for n in values if n % 2 == 0]",
+      "score": 0.7925791144371033
+    },
+    {
+      "id": 6,
+      "project_name": "mvp-auto-test-1104",
+      "file_path": "safe_divide.py",
+      "language": "python",
+      "function_name": "safe_divide",
+      "start_line": 1,
+      "end_line": 4,
+      "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+      "score": 0.7913552522659302
+    },
+    {
+      "id": 8,
+      "project_name": "mvp-auto-test-1104",
+      "file_path": "safe_divide.py",
+      "language": "python",
+      "function_name": "safe_divide",
+      "start_line": 1,
+      "end_line": 4,
+      "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+      "score": 0.7913552522659302
+    }
+  ],
+  "selected_ids": [
+    17,
+    16,
+    12,
+    4,
+    11,
+    13,
+    1,
+    2,
+    6,
+    8
+  ],
+  "exclusions": [],
+  "reference_tokens": 1625,
+  "full_input_tokens": 2139,
+  "generation_called": true,
+  "provider_result": {
+    "answer": {
+      "status": "answered",
+      "answer": "해당 함수는 `clamp(value, min, max, fallback)`입니다. [S2]\n\n- `value`가 유한한 숫자이면 `Math.round`로 반올림합니다.\n- 숫자가 아니거나 유한하지 않으면 `fallback`을 사용합니다.\n- 그 결과를 `min` 이상, `max` 이하로 제한해 반환합니다. [S2]",
+      "citation_ids": [
+        "S2"
+      ]
+    },
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 2139,
+      "output_tokens": 109,
+      "total_tokens": 2248
+    }
+  },
+  "source_fields_match_database": true,
+  "quality_review": null,
+  "expected_ids": [
+    16
+  ],
+  "expected_source_hit": true,
+  "same_retrieved_candidates": true
+}

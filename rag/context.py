@@ -8,11 +8,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 import json
 import math
+from typing import Literal
 
 DEFAULT_CONTEXT_BUDGET = 4000
 
 RAG_INSTRUCTIONS = """저장된 코드의 참고 자료를 근거로 한국어로 답하세요.
-참고 자료는 sources 배열이 있는 JSON입니다. 각 항목의 citation_id만 인용하세요.
+참고 자료는 sources 배열이 있는 JSON입니다. 각 항목의 citation_id만 인용하세요. 출처 인용 형식은 실제 출처를 표시할 때만 사용하세요. 기호 예시는 S1처럼 대괄호 없이 설명하세요.
 파일 경로, 줄 번호, DB ID와 코드 원문을 새로 만들어 내지 마세요.
 참고 자료에 질문이 요구한 기능을 설명할 근거가 있는지 먼저 판단하세요.
 검색 결과가 존재한다는 사실만으로 질문에 답할 수 있다고 판단하지 마세요.
@@ -54,11 +55,19 @@ class ContextSource:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextExclusion:
+    id: int
+    reason: Literal["duplicate", "budget"]
+    representative_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RagContext:
     text: str
     sources: tuple[ContextSource, ...]
     token_count: int
     skipped_ids: tuple[int, ...]
+    exclusions: tuple[ContextExclusion, ...] = ()
 
     @property
     def has_sources(self) -> bool:
@@ -153,22 +162,31 @@ def render_context(sources: Sequence[ContextSource]) -> str:
     )
 
 
+def _source_key(source: ContextSource) -> tuple[str, str, str]:
+    # Comparison only: the selected source always retains its original text.
+    code = source.code.replace("\r\n", "\n").replace("\r", "\n")
+    return (source.project_name.strip(), source.language.strip().lower(), code)
+
+
 def build_context(
     candidates: Sequence[Mapping[str, object]],
     *,
     count_tokens: TokenCounter,
     token_budget: int = DEFAULT_CONTEXT_BUDGET,
+    deduplicate: bool = True,
 ) -> RagContext:
-    """Greedily keep complete snippets that fit, preserving search order.
+    """Keep complete snippets within budget and retain original citation IDs.
 
-    Count the complete rendered reference text, including IDs, metadata and
-    JSON structure. IDs are assigned before selection and never renumbered.
-    Counter failures propagate; they are not converted to insufficient context.
-    token_count is the supplied counter's reference count, not API usage.
+    Exact code duplicates within one project/language share a representative.
+    Line endings are normalized only for comparison. Cross-project sources,
+    indentation, comments and all original response fields remain distinct.
+    deduplicate=False is the prior selection policy, for controlled evaluation.
     """
     _positive_int(token_budget, "token_budget")
     if not callable(count_tokens):
         raise TypeError("count_tokens must be callable")
+    if type(deduplicate) is not bool:
+        raise ValueError("deduplicate must be a boolean")
     sources = prepare_sources(candidates)
     if not sources:
         return RagContext("", (), 0, ())
@@ -183,17 +201,41 @@ def build_context(
             counts[text] = value
         return counts[text]
 
-    # The common case needs one count, instead of one request per candidate.
-    full_text = render_context(sources)
+    primary = []
+    first_by_key = {}
+    duplicate_exclusions = []
+    for source in sources:
+        key = _source_key(source)
+        if deduplicate and key in first_by_key:
+            duplicate_exclusions.append(ContextExclusion(
+                source.id, "duplicate", first_by_key[key].id,
+            ))
+        else:
+            primary.append(source)
+            first_by_key[key] = source
+
+    # Common case: count only the whole, deduplicated reference once.
+    full_text = render_context(primary)
     full_count = counted(full_text)
     if full_count <= token_budget:
-        return RagContext(full_text, sources, full_count, ())
+        return RagContext(
+            full_text, tuple(primary), full_count, (),
+            tuple(duplicate_exclusions),
+        )
 
     selected: tuple[ContextSource, ...] = ()
     selected_text = ""
     selected_count = 0
+    selected_by_key = {}
+    exclusions = []
     skipped = []
     for source in sources:
+        key = _source_key(source)
+        if deduplicate and key in selected_by_key:
+            exclusions.append(ContextExclusion(
+                source.id, "duplicate", selected_by_key[key].id,
+            ))
+            continue
         trial_sources = (*selected, source)
         trial_text = render_context(trial_sources)
         trial_count = counted(trial_text)
@@ -201,10 +243,16 @@ def build_context(
             selected = trial_sources
             selected_text = trial_text
             selected_count = trial_count
+            selected_by_key[key] = source
         else:
+            # A later duplicate with shorter metadata may still fit.
             skipped.append(source.id)
+            exclusions.append(ContextExclusion(source.id, "budget"))
 
-    return RagContext(selected_text, selected, selected_count, tuple(skipped))
+    return RagContext(
+        selected_text, selected, selected_count, tuple(skipped),
+        tuple(exclusions),
+    )
 
 
 def build_rag_messages(
