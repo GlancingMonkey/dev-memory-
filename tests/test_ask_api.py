@@ -266,6 +266,43 @@ class AskApiTests(unittest.TestCase):
         )
         self.assertIn('"status": 504', response.text)
 
+    def test_duplicate_sources_are_removed_before_generation(self):
+        from copy import deepcopy
+        duplicate = deepcopy(DB_SOURCE)
+        duplicate.update(id=18, file_path="other/math.py")
+        answer = ModelAnswer(status="answered", answer="두 값을 더합니다. [S1]", citation_ids=["S1"])
+        with (
+            patch("backend.main.warmup_model"),
+            patch("backend.routers.ask.embed_query", return_value=[1.0]),
+            patch("backend.routers.ask.search_snippets", return_value=[DB_SOURCE, duplicate]),
+            patch("backend.routers.ask.count_context_tokens", return_value=80),
+            patch("backend.routers.ask.count_input_tokens", return_value=120),
+            patch("backend.routers.ask.generate_answer", return_value=(answer, "gpt-6.1-sol", USAGE)) as generate,
+            self.client() as client,
+        ):
+            response = client.post("/ask", json={"q": "합을 설명해줘"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["sources"], [{"citation_id": "S1", **DB_SOURCE}])
+        context_text = generate.call_args.kwargs["messages"][-1]["content"]
+        self.assertEqual(len(json.loads(context_text)["sources"]), 1)
+
+    def test_count_cache_is_reused_when_budget_shrinks_without_changing_text(self):
+        with (
+            patch("backend.main.warmup_model"),
+            patch("backend.routers.ask.embed_query", return_value=[1.0]),
+            patch("backend.routers.ask.search_snippets", return_value=[DB_SOURCE]),
+            patch("backend.routers.ask.count_context_tokens", return_value=80) as count_context,
+            patch("backend.routers.ask.count_input_tokens", return_value=9000) as count_input,
+            patch("backend.routers.ask.generate_answer") as generate,
+            self.client() as client,
+        ):
+            response = client.post("/ask", json={"q": "합을 설명해줘"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "insufficient_context")
+        count_context.assert_called_once()
+        count_input.assert_called_once()
+        generate.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

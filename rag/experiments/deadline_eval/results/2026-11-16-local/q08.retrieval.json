@@ -1,0 +1,121 @@
+{
+  "query_id": "q08",
+  "question": "True는 거부하고 양의 정수만 허용하는 검사 함수",
+  "expected_ids": [
+    11
+  ],
+  "rank": 2,
+  "seconds": 0.07937909700012824,
+  "results": [
+    {
+      "id": 17,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "buildAskRequest",
+      "start_line": 379,
+      "end_line": 393,
+      "code": "export const HISTORY_SEND_MAX = 2;          // 서버로 보내는 이전 대화 수\nconst HISTORY_ANSWER_MAX = 1500;            // 이전 답변은 앞부분만 (요청이 너무 커지지 않게)\n\n// POST /ask 요청 본문. history 는 있을 때만, stream 은 true 일 때만 넣는다 (예전 서버와 그대로 호환)\nexport function buildAskRequest(q: string, limit: number, history: AskTurn[] = [], stream = false): Record<string, unknown> {\n  const body: Record<string, unknown> = { q, limit };\n  const recent = history.slice(-HISTORY_SEND_MAX).map((h) => ({ q: h.q, answer: h.answer.slice(0, HISTORY_ANSWER_MAX) }));\n  if (recent.length) {\n    body.history = recent;\n  }\n  if (stream) {\n    body.stream = true;\n  }\n  return body;\n}",
+      "score": 0.8372117280960083
+    },
+    {
+      "id": 11,
+      "project_name": "capstone-rag",
+      "file_path": "rag/context.py",
+      "language": "python",
+      "function_name": "_positive_int",
+      "start_line": 98,
+      "end_line": 101,
+      "code": "def _positive_int(value: object, name: str) -> int:\n    if type(value) is not int or value <= 0:\n        raise ValueError(f\"{name} must be a positive integer\")\n    return value",
+      "score": 0.8053460717201233
+    },
+    {
+      "id": 4,
+      "project_name": "backend-api-regression",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "multiply",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def multiply(a, b):\n    return a * b",
+      "score": 0.7962215664254699
+    },
+    {
+      "id": 6,
+      "project_name": "mvp-auto-test-1104",
+      "file_path": "safe_divide.py",
+      "language": "python",
+      "function_name": "safe_divide",
+      "start_line": 1,
+      "end_line": 4,
+      "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+      "score": 0.7918475866317749
+    },
+    {
+      "id": 8,
+      "project_name": "mvp-auto-test-1104",
+      "file_path": "safe_divide.py",
+      "language": "python",
+      "function_name": "safe_divide",
+      "start_line": 1,
+      "end_line": 4,
+      "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+      "score": 0.7918475866317749
+    },
+    {
+      "id": 13,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "reindent",
+      "start_line": 100,
+      "end_line": 113,
+      "code": "export function reindent(code: string, prefix: string, eol: string): string {\n  const lines = code.replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');\n  const widths = lines.filter((l) => l.trim().length > 0).map((l) => l.length - l.trimStart().length);\n  const common = widths.length ? Math.min(...widths) : 0;\n  return lines\n    .map((l, i) => {\n      const body = l.trim().length === 0 ? '' : l.slice(common);\n      if (i === 0 || body === '') {\n        return body;\n      }\n      return prefix + body;\n    })\n    .join(eol);\n}",
+      "score": 0.7904932498931885
+    },
+    {
+      "id": 2,
+      "project_name": "mvp-save-test",
+      "file_path": "even_numbers.py",
+      "language": "python",
+      "function_name": "even_numbers",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def even_numbers(values):\n    return [n for n in values if n % 2 == 0]",
+      "score": 0.7893475890159607
+    },
+    {
+      "id": 15,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "askCacheKey",
+      "start_line": 434,
+      "end_line": 436,
+      "code": "export function askCacheKey(q: string): string {\n  return q.trim().replace(/[?？\\s]+$/, '').replace(/\\s+/g, ' ').toLowerCase();\n}",
+      "score": 0.7872936129570007
+    },
+    {
+      "id": 14,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "extractCitations",
+      "start_line": 229,
+      "end_line": 237,
+      "code": "export function extractCitations(answer: string): string[] {\n  const seen: string[] = [];\n  for (const m of answer.matchAll(/\\[(S\\d+)\\]/g)) {\n    if (!seen.includes(m[1])) {\n      seen.push(m[1]);\n    }\n  }\n  return seen;\n}",
+      "score": 0.7845944762229919
+    },
+    {
+      "id": 9,
+      "project_name": "capstone-rag",
+      "file_path": "backend/llm.py",
+      "language": "python",
+      "function_name": "_remaining",
+      "start_line": 59,
+      "end_line": 63,
+      "code": "def _remaining(deadline: float) -> float:\n    remaining = deadline - monotonic()\n    if remaining <= 0:\n        raise LLMTimeoutError\n    return remaining",
+      "score": 0.7835963626389126
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "original_evaluation_snapshot_preserved": true,
+  "rows": 17,
+  "searchable_vectors": 16,
+  "all_dimensions": 768,
+  "norm_min": 0.9999999604814466,
+  "norm_max": 1.0000000829689897,
+  "vector_extension": "0.8.6",
+  "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+  "python": "3.13.18",
+  "libraries": {
+    "fastapi": "0.141.1",
+    "pydantic": "2.13.5",
+    "psycopg": "3.3.5",
+    "pgvector": "0.5.0",
+    "openai": "3.49.0",
+    "torch": "2.8.0+cpu",
+    "sentence-transformers": "5.1.2"
+  },
+  "database_sha256": "ce2da5e4952b21ee8b0c9b709733540d30315564f266a44afde742da229a5283"
+}

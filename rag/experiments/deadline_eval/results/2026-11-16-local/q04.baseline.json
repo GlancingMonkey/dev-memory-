@@ -1,0 +1,197 @@
+{
+  "state": "finished",
+  "query_id": "q04",
+  "mode": "baseline",
+  "question": "0으로 나눌 때 None을 반환하는 안전한 나눗셈 함수",
+  "expected_status": "answered",
+  "expected_summary": "분모 b가 0이면 None, 그 외에는 a / b를 반환한다.",
+  "http_status": 200,
+  "response": {
+    "status": "answered",
+    "answer": "`safe_divide(a, b)`가 해당 함수입니다. 나누는 값 `b`가 0이면 `None`을 반환하고, 0이 아니면 `a / b` 결과를 반환합니다. [S1]",
+    "sources": [
+      {
+        "id": 6,
+        "project_name": "mvp-auto-test-1104",
+        "file_path": "safe_divide.py",
+        "language": "python",
+        "function_name": "safe_divide",
+        "start_line": 1,
+        "end_line": 4,
+        "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+        "score": 0.8510963916778564,
+        "citation_id": "S1"
+      }
+    ],
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 2135,
+      "output_tokens": 73,
+      "total_tokens": 2208
+    },
+    "history_used": 0
+  },
+  "api_seconds": 3.8679073370003607,
+  "stage_seconds": {
+    "embedding": 0.05597060100080853,
+    "database_search": 0.016343780000170227,
+    "reference_count": 0.42750966800122114,
+    "input_count": 0.4221101880011702,
+    "generation": 2.943465626000034
+  },
+  "token_count_calls": {
+    "reference": 1,
+    "input": 1
+  },
+  "candidate_rows": [
+    {
+      "id": 6,
+      "project_name": "mvp-auto-test-1104",
+      "file_path": "safe_divide.py",
+      "language": "python",
+      "function_name": "safe_divide",
+      "start_line": 1,
+      "end_line": 4,
+      "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+      "score": 0.8510963916778564
+    },
+    {
+      "id": 8,
+      "project_name": "mvp-auto-test-1104",
+      "file_path": "safe_divide.py",
+      "language": "python",
+      "function_name": "safe_divide",
+      "start_line": 1,
+      "end_line": 4,
+      "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+      "score": 0.8510963916778564
+    },
+    {
+      "id": 17,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "buildAskRequest",
+      "start_line": 379,
+      "end_line": 393,
+      "code": "export const HISTORY_SEND_MAX = 2;          // 서버로 보내는 이전 대화 수\nconst HISTORY_ANSWER_MAX = 1500;            // 이전 답변은 앞부분만 (요청이 너무 커지지 않게)\n\n// POST /ask 요청 본문. history 는 있을 때만, stream 은 true 일 때만 넣는다 (예전 서버와 그대로 호환)\nexport function buildAskRequest(q: string, limit: number, history: AskTurn[] = [], stream = false): Record<string, unknown> {\n  const body: Record<string, unknown> = { q, limit };\n  const recent = history.slice(-HISTORY_SEND_MAX).map((h) => ({ q: h.q, answer: h.answer.slice(0, HISTORY_ANSWER_MAX) }));\n  if (recent.length) {\n    body.history = recent;\n  }\n  if (stream) {\n    body.stream = true;\n  }\n  return body;\n}",
+      "score": 0.8394423723220825
+    },
+    {
+      "id": 16,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "clamp",
+      "start_line": 495,
+      "end_line": 498,
+      "code": "export function clamp(value: unknown, min: number, max: number, fallback: number): number {\n  const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback;\n  return Math.min(max, Math.max(min, n));\n}",
+      "score": 0.8175164704774762
+    },
+    {
+      "id": 4,
+      "project_name": "backend-api-regression",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "multiply",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def multiply(a, b):\n    return a * b",
+      "score": 0.8168070425506223
+    },
+    {
+      "id": 13,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "reindent",
+      "start_line": 100,
+      "end_line": 113,
+      "code": "export function reindent(code: string, prefix: string, eol: string): string {\n  const lines = code.replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');\n  const widths = lines.filter((l) => l.trim().length > 0).map((l) => l.length - l.trimStart().length);\n  const common = widths.length ? Math.min(...widths) : 0;\n  return lines\n    .map((l, i) => {\n      const body = l.trim().length === 0 ? '' : l.slice(common);\n      if (i === 0 || body === '') {\n        return body;\n      }\n      return prefix + body;\n    })\n    .join(eol);\n}",
+      "score": 0.8160275220870972
+    },
+    {
+      "id": 11,
+      "project_name": "capstone-rag",
+      "file_path": "rag/context.py",
+      "language": "python",
+      "function_name": "_positive_int",
+      "start_line": 98,
+      "end_line": 101,
+      "code": "def _positive_int(value: object, name: str) -> int:\n    if type(value) is not int or value <= 0:\n        raise ValueError(f\"{name} must be a positive integer\")\n    return value",
+      "score": 0.8102611303329468
+    },
+    {
+      "id": 1,
+      "project_name": "mvp-save-test",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "add",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def add(a, b):\r\n    return a + b",
+      "score": 0.8029302358627319
+    },
+    {
+      "id": 9,
+      "project_name": "capstone-rag",
+      "file_path": "backend/llm.py",
+      "language": "python",
+      "function_name": "_remaining",
+      "start_line": 59,
+      "end_line": 63,
+      "code": "def _remaining(deadline: float) -> float:\n    remaining = deadline - monotonic()\n    if remaining <= 0:\n        raise LLMTimeoutError\n    return remaining",
+      "score": 0.802766883043428
+    },
+    {
+      "id": 15,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "askCacheKey",
+      "start_line": 434,
+      "end_line": 436,
+      "code": "export function askCacheKey(q: string): string {\n  return q.trim().replace(/[?？\\s]+$/, '').replace(/\\s+/g, ' ').toLowerCase();\n}",
+      "score": 0.7995398044586182
+    }
+  ],
+  "selected_ids": [
+    6,
+    8,
+    17,
+    16,
+    4,
+    13,
+    11,
+    1,
+    9,
+    15
+  ],
+  "exclusions": [],
+  "reference_tokens": 1624,
+  "full_input_tokens": 2135,
+  "generation_called": true,
+  "provider_result": {
+    "answer": {
+      "status": "answered",
+      "answer": "`safe_divide(a, b)`가 해당 함수입니다. 나누는 값 `b`가 0이면 `None`을 반환하고, 0이 아니면 `a / b` 결과를 반환합니다. [S1]",
+      "citation_ids": [
+        "S1"
+      ]
+    },
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 2135,
+      "output_tokens": 73,
+      "total_tokens": 2208
+    }
+  },
+  "source_fields_match_database": true,
+  "quality_review": null,
+  "expected_ids": [
+    6,
+    8
+  ],
+  "expected_source_hit": true,
+  "same_retrieved_candidates": true
+}

@@ -1,0 +1,19 @@
+{
+  "pr": 51,
+  "sha": "e9f50b796344137b9c67920e55ad4093c58f291c",
+  "actual_filter_options_parsed": true,
+  "actual_search_filters_applied": true,
+  "actual_sse_responses_parsed": [
+    {
+      "query_id": "q11",
+      "status": "answered",
+      "unknown_citations": 0
+    },
+    {
+      "query_id": "q21",
+      "status": "insufficient_context",
+      "unknown_citations": 0
+    }
+  ],
+  "windows_ui_exercised": false
+}

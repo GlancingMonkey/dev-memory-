@@ -1,0 +1,201 @@
+{
+  "state": "finished",
+  "query_id": "q05",
+  "mode": "optimized",
+  "question": "두 인수의 곱을 구하는 함수",
+  "expected_status": "answered",
+  "expected_summary": "두 인수의 곱 a * b를 반환한다.",
+  "http_status": 200,
+  "response": {
+    "status": "answered",
+    "answer": "`multiply(a, b)` 함수가 두 인수 `a`와 `b`를 곱한 결과를 반환합니다. [S1]",
+    "sources": [
+      {
+        "id": 4,
+        "project_name": "backend-api-regression",
+        "file_path": "sample.py",
+        "language": "python",
+        "function_name": "multiply",
+        "start_line": 1,
+        "end_line": 2,
+        "code": "def multiply(a, b):\n    return a * b",
+        "score": 0.8232064948554951,
+        "citation_id": "S1"
+      }
+    ],
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 2000,
+      "output_tokens": 54,
+      "total_tokens": 2054
+    },
+    "history_used": 0
+  },
+  "api_seconds": 4.049808656998721,
+  "stage_seconds": {
+    "embedding": 0.04854239899941604,
+    "database_search": 0.015478176999749849,
+    "reference_count": 0.45871240599990415,
+    "input_count": 0.45095893899997463,
+    "generation": 3.073537927999496
+  },
+  "token_count_calls": {
+    "reference": 1,
+    "input": 1
+  },
+  "candidate_rows": [
+    {
+      "id": 4,
+      "project_name": "backend-api-regression",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "multiply",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def multiply(a, b):\n    return a * b",
+      "score": 0.8232064948554951
+    },
+    {
+      "id": 17,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "buildAskRequest",
+      "start_line": 379,
+      "end_line": 393,
+      "code": "export const HISTORY_SEND_MAX = 2;          // 서버로 보내는 이전 대화 수\nconst HISTORY_ANSWER_MAX = 1500;            // 이전 답변은 앞부분만 (요청이 너무 커지지 않게)\n\n// POST /ask 요청 본문. history 는 있을 때만, stream 은 true 일 때만 넣는다 (예전 서버와 그대로 호환)\nexport function buildAskRequest(q: string, limit: number, history: AskTurn[] = [], stream = false): Record<string, unknown> {\n  const body: Record<string, unknown> = { q, limit };\n  const recent = history.slice(-HISTORY_SEND_MAX).map((h) => ({ q: h.q, answer: h.answer.slice(0, HISTORY_ANSWER_MAX) }));\n  if (recent.length) {\n    body.history = recent;\n  }\n  if (stream) {\n    body.stream = true;\n  }\n  return body;\n}",
+      "score": 0.8204217553138733
+    },
+    {
+      "id": 1,
+      "project_name": "mvp-save-test",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "add",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def add(a, b):\r\n    return a + b",
+      "score": 0.8037614822387695
+    },
+    {
+      "id": 13,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "reindent",
+      "start_line": 100,
+      "end_line": 113,
+      "code": "export function reindent(code: string, prefix: string, eol: string): string {\n  const lines = code.replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');\n  const widths = lines.filter((l) => l.trim().length > 0).map((l) => l.length - l.trimStart().length);\n  const common = widths.length ? Math.min(...widths) : 0;\n  return lines\n    .map((l, i) => {\n      const body = l.trim().length === 0 ? '' : l.slice(common);\n      if (i === 0 || body === '') {\n        return body;\n      }\n      return prefix + body;\n    })\n    .join(eol);\n}",
+      "score": 0.8011988401412964
+    },
+    {
+      "id": 2,
+      "project_name": "mvp-save-test",
+      "file_path": "even_numbers.py",
+      "language": "python",
+      "function_name": "even_numbers",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def even_numbers(values):\n    return [n for n in values if n % 2 == 0]",
+      "score": 0.7981145977973938
+    },
+    {
+      "id": 12,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "adjustEndLine",
+      "start_line": 90,
+      "end_line": 95,
+      "code": "export function adjustEndLine(startLine: number, endLine: number, endCharacter: number): number {\n  if (endCharacter === 0 && endLine > startLine) {\n    return endLine - 1;\n  }\n  return endLine;\n}",
+      "score": 0.7945746779441833
+    },
+    {
+      "id": 16,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "clamp",
+      "start_line": 495,
+      "end_line": 498,
+      "code": "export function clamp(value: unknown, min: number, max: number, fallback: number): number {\n  const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback;\n  return Math.min(max, Math.max(min, n));\n}",
+      "score": 0.7942285774418292
+    },
+    {
+      "id": 11,
+      "project_name": "capstone-rag",
+      "file_path": "rag/context.py",
+      "language": "python",
+      "function_name": "_positive_int",
+      "start_line": 98,
+      "end_line": 101,
+      "code": "def _positive_int(value: object, name: str) -> int:\n    if type(value) is not int or value <= 0:\n        raise ValueError(f\"{name} must be a positive integer\")\n    return value",
+      "score": 0.7940033674240112
+    },
+    {
+      "id": 6,
+      "project_name": "mvp-auto-test-1104",
+      "file_path": "safe_divide.py",
+      "language": "python",
+      "function_name": "safe_divide",
+      "start_line": 1,
+      "end_line": 4,
+      "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+      "score": 0.7908738851547241
+    },
+    {
+      "id": 8,
+      "project_name": "mvp-auto-test-1104",
+      "file_path": "safe_divide.py",
+      "language": "python",
+      "function_name": "safe_divide",
+      "start_line": 1,
+      "end_line": 4,
+      "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+      "score": 0.7908738851547241
+    }
+  ],
+  "selected_ids": [
+    4,
+    17,
+    1,
+    13,
+    2,
+    12,
+    16,
+    11,
+    6
+  ],
+  "exclusions": [
+    {
+      "id": 8,
+      "reason": "duplicate",
+      "representative_id": 6
+    }
+  ],
+  "reference_tokens": 1497,
+  "full_input_tokens": 2000,
+  "generation_called": true,
+  "provider_result": {
+    "answer": {
+      "status": "answered",
+      "answer": "`multiply(a, b)` 함수가 두 인수 `a`와 `b`를 곱한 결과를 반환합니다. [S1]",
+      "citation_ids": [
+        "S1"
+      ]
+    },
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 2000,
+      "output_tokens": 54,
+      "total_tokens": 2054
+    }
+  },
+  "source_fields_match_database": true,
+  "quality_review": null,
+  "expected_ids": [
+    4
+  ],
+  "expected_source_hit": true,
+  "same_retrieved_candidates": true
+}

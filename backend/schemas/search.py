@@ -1,4 +1,19 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+class SearchFilters(BaseModel):
+    project: str | None = Field(default=None, max_length=200)
+    language: str | None = Field(default=None, max_length=200)
+
+    @field_validator("project", "language", mode="before")
+    @classmethod
+    def normalize(cls, value, info):
+        if isinstance(value, str):
+            value = value.strip()
+            if info.field_name == "language":
+                value = value.lower()
+            return value or None
+        return value
 
 
 class SearchResult(BaseModel):
@@ -15,3 +30,4 @@ class SearchResult(BaseModel):
 
 class SearchResponse(BaseModel):
     results: list[SearchResult]
+    filters: SearchFilters = Field(default_factory=SearchFilters)

@@ -1,6 +1,7 @@
 # RAG 모듈 안내
 
-- [Context·출처 구성과 Backend 연결](CONTEXT.md): 첫 RAG 연결용 모듈·계수 경계·검사 방법.
+- [Context·출처 구성과 Backend 연결](CONTEXT.md): 원문 보존·중복 제거·예산 선택·검사 방법.
+- [실제 코드 25개 질문 평가](experiments/deadline_eval/README.md): 실행·비교 조건·원본 결과와 한계.
 - 아래 임베딩 재처리 가이드: 기존 ID·원문을 보존하는 재처리 절차.
 
 # RAG 임베딩 재처리

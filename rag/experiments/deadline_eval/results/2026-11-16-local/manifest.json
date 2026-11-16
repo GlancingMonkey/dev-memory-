@@ -1,0 +1,85 @@
+{
+  "base_commit": "a6480d663264387f981ab136c85039ab6f4e904b",
+  "code_sha256": {
+    "backend/database.py": "47c494c3a77a4e6bf8fdf8f8dde4354783a8f5b1dd953c9cf3d63dcc5b24cb8c",
+    "backend/routers/search.py": "bbb905714398875bef1db37a6bc27c3ef5560f47057e942336c1af07cc66569e",
+    "backend/routers/ask.py": "82409064b1c757eddaf4c311916e150fa24925d1928a9d07b18af6ff70a6691e",
+    "backend/routers/filters.py": "c58f6a6d19672b686cdfd78f95092772013e0201ade14718a49949626a2c6543",
+    "backend/schemas/search.py": "de352ec6a1140b370d31ee654d293994ba7c5dc3d9d5200d89f36c29db7eaf9d",
+    "backend/schemas/filters.py": "e6635319b4a8ffa0b0fd25450c9b2a49afeba9d4893861240efcb28b714810ea",
+    "backend/llm.py": "1c9e2011da740ebc5bfd83abf75a4022c96dfb6157174347a1e0a5dc2b8f4324",
+    "rag/context.py": "1ebb018fdf4ca8104a9e197b54f1d4c8f6c35aa510720880b2c9ffe1496abf77",
+    "rag/embedding.py": "6896a538da7b5f4c55cd5568d3c0978fcf51bf08e33b7be5eae228e4574f0410",
+    "rag/experiments/deadline_eval/measure.py": "869b9b87f467629a3e914118a0667bb025f799b6966e948528b1e4f2c7e0cb79",
+    "rag/experiments/deadline_eval/evaluate.py": "0bb1a7f83b6f614e14e10fb2a5bcdeb140ff8232dccf58ecf72f691c0332799d"
+  },
+  "samples_sha256": "fddba4cd3c7875e5d37081372338d12f6011536c1ba895534c1a1622ffcf32e7",
+  "database_sha256": "ce2da5e4952b21ee8b0c9b709733540d30315564f266a44afde742da229a5283",
+  "question_count": 25,
+  "limit": 10,
+  "generation_enabled": true,
+  "embedding_model": "intfloat/multilingual-e5-base",
+  "embedding_revision": "d128750597153bb5987e10b1c3493a34e5a4502a",
+  "model": "gpt-6.1-sol",
+  "reasoning": "low",
+  "context_budget": 4000,
+  "input_limit": 8000,
+  "max_output_tokens": 4096,
+  "prompt_sha256": "a2889deff5db26ce407f515928aa098a6a3406a0e29006fdd7958dbbfe9f417e",
+  "comparison": "Only exact-code selection differs; request count cache enabled in both modes",
+  "timing": "In-process FastAPI elapsed time includes retrieval, counting, generation and validation; excludes startup/TCP/UI",
+  "python": "3.13.18",
+  "libraries": {
+    "torch": "2.8.0+cpu",
+    "sentence-transformers": "5.1.2",
+    "transformers": "4.57.1",
+    "numpy": "2.2.6",
+    "openai": "3.49.0"
+  },
+  "bindings": {
+    "add": [
+      1
+    ],
+    "even_numbers": [
+      2
+    ],
+    "sort_users": [
+      3,
+      5
+    ],
+    "safe_divide": [
+      6,
+      8
+    ],
+    "multiply": [
+      4
+    ],
+    "remaining": [
+      9
+    ],
+    "render_context": [
+      10
+    ],
+    "positive_int": [
+      11
+    ],
+    "adjust_end_line": [
+      12
+    ],
+    "reindent": [
+      13
+    ],
+    "extract_citations": [
+      14
+    ],
+    "ask_cache_key": [
+      15
+    ],
+    "clamp": [
+      16
+    ],
+    "build_ask_request": [
+      17
+    ]
+  }
+}

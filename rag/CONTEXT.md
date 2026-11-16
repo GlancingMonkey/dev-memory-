@@ -1,4 +1,4 @@
-# RAG Context 첫 연결
+# RAG Context와 출처·토큰 예산
 
 검색 결과의 코드와 메타데이터를 원문 그대로 참고 자료로 묶고,
 요청 안에서 사용하는 출처 ID를 연결한다. 관련 이슈: [#43](https://github.com/GlancingMonkey/dev-memory-/issues/43).
@@ -6,7 +6,7 @@
 이 문서는 **순수 Context 모듈과 검사**의 역할을 설명한다.
 현재 develop에는 Backend의 실제 LLM 토큰 계수·AI 질문 API와
 Extension 답변 화면이 연결되어 있다. 이 모듈은 참고 자료와 지시문 구성을 담당한다.
-[공식 API 계약](../API_CONTRACT.md)은 변경하지 않았다.
+요청·응답은 [공식 API 계약](../API_CONTRACT.md)을 따른다. Context 최적화로 /ask의 응답 구조를 바꾸지 않는다.
 `has_sources=True`만으로 질문에 답할 근거가 충분하다고 판단하지 않는다.
 
 ## 파일과 담당 경계
@@ -25,14 +25,16 @@ Extension 답변 화면이 연결되어 있다. 이 모듈은 참고 자료와 �
 
 `backend.database.search_snippets()`의 실제 검색 행 목록을 전달한다.
 입력 행은 id·기존 7개 저장 필드·score를 포함해야 한다.
-모듈은 재조회·재정렬·코드 중복 제거를 하지 않는다.
+모듈은 DB 재조회나 순위 재정렬을 하지 않는다. 같은 프로젝트·언어 안의 동일 코드를 보수적으로 묶고 예산 안에 전체 스니펫을 선택한다.
 
 ```python
+from time import monotonic
+from backend.llm import count_context_tokens, REQUEST_TIMEOUT_SECONDS
 from rag.context import build_context, build_rag_messages
 
-# rows: 기존 search_snippets() 결과
-# llm_text_counter: 선택한 LLM에 대해 확인한 str -> int 계수 함수를
-# Backend 담당자가 연결해야 한다. 이 이름의 구현은 아직 저장소에 없다.
+# rows와 question은 호출자가 전달한다.
+deadline = monotonic() + REQUEST_TIMEOUT_SECONDS
+llm_text_counter = lambda text: count_context_tokens(context=text, deadline=deadline)
 context = build_context(
     rows,
     count_tokens=llm_text_counter,
@@ -49,7 +51,7 @@ else:
 
 위 코드는 연결 방법을 보여 주는 예시이며 독립 실행 명령이 아니다.
 `rows`, `question`, 실제 계수 함수를 호출자가 제공해야 한다.
-기본 4,000은 #42의 첫 검증용 제안이며 고정된 서비스 계약이나 실측값이 아니다.
+현재 참고 자료 상한은 계약의 4,000토큰이다. 기본값과 실제 사용량을 구분한다. 위 계수 함수는 실제 제공자 API를 사용한다.
 
 반환값은 다음과 같다.
 
@@ -58,7 +60,8 @@ else:
 - `sources`: 변경 불가능한 `ContextSource` 항목의 tuple.
 - `token_count`: 전달한 계수 함수로 계산한 참고 자료 문자열의 크기.
   제공자가 보고한 실제 `usage`나 전체 요청 토큰 수가 아니다.
-- `skipped_ids`: 예산 때문에 전체가 제외된 DB ID.
+- `skipped_ids`: 예산 때문에 전체가 제외된 DB ID. 중복 제외와 구분한다.
+- `exclusions`: 제외된 id·reason(duplicate/budget)·중복 대표 representative_id. API에 새 필드를 요구하지 않는 내부 검사 자료다.
 - `has_sources`: 자료 존재 여부. 답변 가능 여부·관련성 판정은 별도다.
 
 `RAG_INSTRUCTIONS`는 한국어 답변·실제 출처 인용·근거 부족 안내와
@@ -79,7 +82,7 @@ JSON 인코딩과 지시문만으로 프롬프트 주입이나 잘못된 답변�
 
 ## 출처 ID와 답변 검증
 
-검색 결과 순서로 `S1`, `S2` 등을 붙인 뒤 예산을 적용한다.
+검색 결과 순서로 `S1`, `S2` 등을 붙인 뒤 중복 제거와 예산을 적용한다.
 예를 들어 S2가 너무 크면 선택 결과는 S1·S3일 수 있다.
 Backend는 연속된 번호라고 가정하거나 번호를 다시 붙이지 않는다.
 
@@ -96,16 +99,28 @@ Backend는 추가로 다음을 확인해야 한다.
 4. insufficient_context에 답변 인용이나 사용 출처 ID가 있으면 오류로 처리한다.
 5. 형식·ID 검증과 코드에 대한 설명의 정확성 평가는 구분한다.
 
+## 동일 코드의 비교와 대표 출처
+
+- 프로젝트 이름(대소문자 구분), 언어, 코드 원문을 비교한다. 비교할 때만 코드의 CRLF/CR을 LF로 맞춘다.
+- 들여쓰기·주석·문자열·끝 줄바꿈은 제거하거나 요약하지 않는다.
+- 다른 프로젝트의 동일 코드는 출처 맥락을 보존하기 위해 별도로 유지한다.
+- 같은 그룹에서는 검색 순서상 먼저 예산에 들어오는 전체 스니펫을 대표로 고른다.
+- 앞 후보가 큰 메타데이터 때문에 들어가지 않으면 뒤의 같은 코드 후보도 예산 안에 들어갈 기회를 갖는다.
+- 선택된 원문·메타데이터·ID·citation_id는 그대로다. 중복 DB 행이나 기존 벡터를 삭제하지 않는다.
+- 대표 출처와 제외 ID를 기록하고 실제 답변의 인용은 선택된 출처에만 허용한다.
+- deduplicate=False는 이전 선택 정책과 공정하게 비교할 때만 사용한다. /ask 요청 옵션을 추가한 것이 아니다.
+- 유사도 임계값이나 변수명 변경·부분 중복 판정은 적용하지 않는다.
+
 ## 토큰 계수와 기본 예산 정책
 
 계수 함수는 필수다. E5 토크나이저·문자 수·고정 추정값으로 대체하지 않는다.
 실제 LLM 계수 연결 전에는 운영용 토큰 제한이 검증됐다고 표시하지 않는다.
 
 - 출처 ID·메타데이터·원문·JSON 구조를 포함한 **전체 참고 자료 문자열**을 계수한다.
-- 전부 예산 안에 들어가면 한 번만 계수한다.
+- 중복 비교 후 전체가 예산 안에 들어가면 한 번만 계수한다.
 - 넘으면 검색 순서로 완전한 스니펫을 추가해 보고, 초과한 스니펫 전체를
   제외한 뒤 다음 후보를 확인한다. 코드 중간을 잘라 넣지 않는다.
-- 같은 문자열의 계수 결과는 한 번의 함수 실행 동안 재사용한다.
+- 같은 문자열의 계수 결과는 한 번의 함수 실행 동안 재사용한다. Backend도 한 요청에서 예산을 줄일 때 동일 참고 자료·동일 최종 메시지 계수를 재사용한다.
 - 자료가 비면 계수 함수도 호출하지 않는다.
 - 계수 함수 오류와 잘못된 검색 행은 오류로 전달한다.
   모델·계수 장애를 정상적인 근거 부족으로 숨기지 않는다.
@@ -127,7 +142,7 @@ Dev Container Bash의 저장소 루트에서 실행한다.
 uv run --locked python -m unittest discover -s tests -p "test_rag_context.py" -v
 ```
 
-Context 자동 검사를 실행한다. 정상 결과는 `Ran 15 tests`와 `OK`다.
+Context 자동 검사를 실행한다. 정상 결과는 마지막 `OK`다. 검사 수는 현재 파일에 따라 달라진다.
 테스트의 계수 함수는 **테스트 전용 가상 단위**이며 실제 LLM 토큰 측정이 아니다.
 이 검사는 DB·E5·LLM을 호출하지 않는다.
 
@@ -165,6 +180,12 @@ uv run --locked python -m unittest discover -s tests -p "test_*.py" -v
 정상 질문과 함께 근거 부족 질문도 실제 모델로 확인하며,
 일부 사례의 성공만으로 전체 질문의 정확성을 보장하지 않는다.
 #43 전체 완료는 합의한 실제 통합·품질 검증 결과까지 확인한 뒤 판단한다.
+
+## 2026-11-16 최적화와 평가
+
+[실제 코드 25개 질문 평가](experiments/deadline_eval/README.md)와 [검증 결과·한계](../docs/EVALUATION_2026-11-16.md)를 참고한다.
+기준 방식과 개선 방식의 모델·지시문·후보·예산은 같게 유지한다.
+검색 적중, 실제 사용 출처, 답변 내용의 정확성, 참고 자료 토큰과 전체 usage는 구분한다.
 
 ## 2026-11-11 로컬 검증 기록
 

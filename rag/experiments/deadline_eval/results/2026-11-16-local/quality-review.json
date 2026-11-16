@@ -1,0 +1,503 @@
+{
+  "reviewer": "Codex agent; not an independent human panel",
+  "method": "Compared every recorded answer with the versioned code and predefined expected summary. Core behavior, successful delivery and citation validation are separate.",
+  "general_accuracy_claim": false,
+  "records": [
+    {
+      "query_id": "q01",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q02",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q03",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q04",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q05",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q06",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q07",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": [
+        "to_dict implementation is not supplied; answer explicitly states this limit."
+      ]
+    },
+    {
+      "query_id": "q08",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q09",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q10",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q11",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q12",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q13",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q14",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q15",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q16",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q17",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q18",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q19",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": [
+        "Core indentation behavior matches; existing cursor indentation is an interpretation of caller use, with missing caller code acknowledged."
+      ]
+    },
+    {
+      "query_id": "q20",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q21",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q22",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q23",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q24",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q25",
+      "mode": "baseline",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q01",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q02",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q03",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q04",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q05",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q06",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q07",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": [
+        "to_dict implementation is not supplied; answer explicitly states this limit."
+      ]
+    },
+    {
+      "query_id": "q08",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q09",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q10",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q11",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": false,
+      "citation_validation_passed": false,
+      "notes": [
+        "Raw model explains the right function, but citation example collides with reference validation; delivery fails."
+      ]
+    },
+    {
+      "query_id": "q12",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q13",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q14",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q15",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q16",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q17",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q18",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q19",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": [
+        "Core indentation behavior matches; existing cursor indentation is an interpretation of caller use, with missing caller code acknowledged."
+      ]
+    },
+    {
+      "query_id": "q20",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q21",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q22",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q23",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q24",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q25",
+      "mode": "optimized",
+      "dataset": "4000-token original comparison",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q04",
+      "mode": "optimized",
+      "dataset": "targeted citation fix",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q11",
+      "mode": "optimized",
+      "dataset": "targeted citation fix",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q20",
+      "mode": "optimized",
+      "dataset": "targeted citation fix",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    },
+    {
+      "query_id": "q21",
+      "mode": "optimized",
+      "dataset": "targeted citation fix",
+      "core_behavior_supported_by_supplied_code": true,
+      "response_delivered": true,
+      "citation_validation_passed": true,
+      "notes": []
+    }
+  ]
+}

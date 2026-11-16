@@ -1,0 +1,10 @@
+{
+  "context_budget": 512,
+  "production_default": 4000,
+  "prompt_sha256": "cc8503cc511ac2782cbf858c313a3b657514223e8f3eab89a062236a5a5bb257",
+  "query_ids": [
+    "q01",
+    "q16"
+  ],
+  "note": "Separate controlled budget-pressure check; not the 4000-token benchmark"
+}

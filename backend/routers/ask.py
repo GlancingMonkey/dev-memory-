@@ -91,10 +91,21 @@ def ask_endpoint(
     try:
         token_budget = DEFAULT_CONTEXT_BUDGET
         history = [turn.model_dump() for turn in request.history]
-        count_context = lambda text: count_context_tokens(
-            context=text,
-            deadline=deadline,
-        )
+        context_counts: dict[str, int] = {}
+        input_counts: dict[str, int] = {}
+
+        def count_context(text: str) -> int:
+            _check_deadline(deadline)
+            if text not in context_counts:
+                context_counts[text] = count_context_tokens(context=text, deadline=deadline)
+            return context_counts[text]
+
+        def count_input(messages: list[dict[str, str]]) -> int:
+            _check_deadline(deadline)
+            key = json.dumps(messages, ensure_ascii=False, sort_keys=True)
+            if key not in input_counts:
+                input_counts[key] = count_input_tokens(messages=messages, deadline=deadline)
+            return input_counts[key]
         context = build_context(
             results,
             count_tokens=count_context,
@@ -106,12 +117,12 @@ def ask_endpoint(
             return _insufficient_context()
 
         messages = build_rag_messages(question, context, history=history)
-        input_tokens = count_input_tokens(messages=messages, deadline=deadline)
+        input_tokens = count_input(messages)
         while input_tokens > MAX_INPUT_TOKENS:
             if history:
                 history.pop(0)
                 messages = build_rag_messages(question, context, history=history)
-                input_tokens = count_input_tokens(messages=messages, deadline=deadline)
+                input_tokens = count_input(messages)
                 continue
             if token_budget <= 1:
                 raise HTTPException(
@@ -129,7 +140,7 @@ def ask_endpoint(
                     return _streaming_response(_empty_stream())
                 return _insufficient_context()
             messages = build_rag_messages(question, context, history=history)
-            input_tokens = count_input_tokens(messages=messages, deadline=deadline)
+            input_tokens = count_input(messages)
 
         _check_deadline(deadline)
         if request.stream:

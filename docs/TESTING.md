@@ -10,7 +10,7 @@
 uv run --locked python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-tests/test_search_api.py, tests/test_snippet_embedding_api.py, tests/test_retry_embeddings.py가 대상입니다. DB·임베딩 호출을 모의 처리해 요청 검증, 저장 실패 분류, 원문 보존 흐름, 같은 ID 재처리 보호 조건을 검사합니다. 실제 DB와 모델의 동작 검증을 대신하지 않습니다.
+test_*.py에 해당하는 Backend·RAG 검사 전체가 대상입니다. 검색 조건·필터 목록·저장·재처리·Context 선택·JSON/SSE 답변·평가 보호 동작을 포함합니다. DB·임베딩 호출을 모의 처리해 요청 검증, 저장 실패 분류, 원문 보존 흐름, 같은 ID 재처리 보호 조건을 검사합니다. 실제 DB와 모델의 동작 검증을 대신하지 않습니다.
 
 ### Extension — Windows PowerShell
 
@@ -35,7 +35,8 @@ npm.cmd run compile
 | 저장 요청 | 실제 POST·HTTP 응답·ID·ready/error=null 기록 |
 | DB 원문 | 코드의 줄바꿈·들여쓰기를 포함해 전송한 7개 필드와 일치 |
 | DB 벡터 | 같은 행에 768차원·유한 값·norm 약 1, ready 상태 |
-| 검색 API | 같은 질문·limit으로 반환된 ID·코드·메타데이터를 DB와 대조 |
+| 검색 API | 같은 질문·limit·project·language로 반환된 ID·코드·메타데이터와 응답 filters를 DB와 대조 |
+| 필터 목록 | 유효 벡터 행의 정규화한 프로젝트·언어별 수, 빈 목록과 DB 오류 구분 |
 | 검색 UI | 필터를 해제하고 API 순서·ID·코드·점수 표시와 대조 |
 | 코드 활용 | 원본 파일과 줄 범위, 새 빈 편집기의 복사·삽입 확인 |
 
@@ -55,6 +56,12 @@ npm.cmd run compile
 ## 오류 화면과 실제 장애를 구분
 
 검색 UI의 빈 결과·503 표시는 시험 응답을 사용해 확인할 수 있습니다. 이 결과를 실제 DB·모델 장애나 **POST 저장 503**을 재현한 것으로 기록하지 않습니다. 시험 후 실제 API 주소·mock 설정을 복원하고 실제 검색을 확인합니다.
+
+## 실제 검색·RAG 품질과 토큰 비교
+
+[25개 질문 평가 안내](../rag/experiments/deadline_eval/README.md)와 [11/16 결과](EVALUATION_2026-11-16.md)를 확인합니다.
+정답 질문과 근거 부족 질문의 분모, 검색 적중과 답변 정확성, 인용 검증과 provider usage를 구분합니다.
+기본 검색 평가는 생성하지 않으며 --ask는 유료 호출을 명시적으로 활성화합니다.
 
 ## 결과를 남길 때
 
