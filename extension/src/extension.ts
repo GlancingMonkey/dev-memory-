@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { COMPARE_SCHEME, compareDocs, SaveRecord, SearchViewProvider } from './sidebar';
+import { COMPARE_SCHEME, compareDocs, findDuplicate, SaveRecord, SearchViewProvider } from './sidebar';
 import { EvaluationRunner } from './evaluation';
 import {
   adjustEndLine, clamp, EmbeddingStatus, findFunctionNameByRegex, formatSeconds, maskSecrets, parseSaveResponse, pickSymbol, SaveUnconfirmedError,
@@ -376,6 +376,41 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       const maskNote = secret.choice === 'mask' ? ` · 비밀값 ${secret.count}개 가림` : '';
+
+      // 중복 확인 — 거의 같은 코드가 이미 저장돼 있으면 한 번 묻는다 (검색 실패는 무시하고 저장 진행)
+      const dupConfig = vscode.workspace.getConfiguration('codeMemory');
+      if (dupConfig.get<boolean>('duplicateCheck', true)) {
+        const threshold = Math.min(1, Math.max(0.5, dupConfig.get<number>('duplicateThreshold', 0.95)));
+        let dup: Awaited<ReturnType<typeof findDuplicate>> = null;
+        try {
+          dup = await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Window, title: 'Code Memory: 비슷한 코드 확인 중…' },
+            () => findDuplicate(snippet.code, threshold));
+        } catch (err) {
+          output.appendLine(`[중복 확인] 건너뜀: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        if (dup) {
+          const r = dup.result;
+          const name = r.function_name ?? r.file_path.split('/').pop() ?? '';
+          const pick = await vscode.window.showInformationMessage(
+            '이미 거의 같은 코드가 저장돼 있어요',
+            {
+              modal: true,
+              detail: `${name} · ${r.file_path}:${r.start_line}-${r.end_line} · id ${r.id} · 유사도 ${dup.score.toFixed(2)}`
+                + `\n\n그래도 저장하면 새 행으로 하나 더 저장돼요. (기준 ${threshold.toFixed(2)} 은 설정 duplicateThreshold)`,
+            },
+            '그래도 저장', '기존 것 보기',
+          );
+          if (pick === '기존 것 보기') {
+            void searchProvider.searchFor(name);
+          }
+          if (pick !== '그래도 저장') {
+            vscode.window.setStatusBarMessage('Code Memory: 저장 취소 (이미 비슷한 코드 있음)', 3000);
+            return;
+          }
+          output.appendLine(`[중복 확인] id ${r.id} 와 유사도 ${dup.score.toFixed(3)} — 그래도 저장`);
+        }
+      }
       if (secret.choice !== 'none') {
         output.appendLine(`[비밀값] ${secret.count}개 발견 → ${secret.choice === 'mask' ? '가리고 저장' : '그대로 저장'}`);
       }
@@ -569,7 +604,7 @@ export function activate(context: vscode.ExtensionContext) {
         ? vscode.ConfigurationTarget.Workspace
         : vscode.ConfigurationTarget.Global;
 
-    type Id = 'mock' | 'real' | 'url' | 'health' | 'settings' | 'search' | 'save' | 'ask' | 'feedback' | 'key' | 'walkthrough' | 'sep';
+    type Id = 'mock' | 'real' | 'url' | 'health' | 'settings' | 'search' | 'save' | 'ask' | 'feedback' | 'key' | 'walkthrough' | 'demo' | 'sep';
     type Item = vscode.QuickPickItem & { id: Id };
     const sep = (label: string): Item => ({ id: 'sep', label, kind: vscode.QuickPickItemKind.Separator });
     const fb = searchProvider.feedbackCounts();
@@ -584,6 +619,7 @@ export function activate(context: vscode.ExtensionContext) {
       { id: 'feedback', label: '$(export) AI 피드백 내보내기', description: `👍 ${fb.up} · 👎 ${fb.down}` },
       { id: 'key', label: '$(key) AI 키 설정', description: keyLabel ? `내 키 (${keyLabel})` : '서버 기본 키' },
       { id: 'walkthrough', label: '$(question) 시작하기 안내' },
+      { id: 'demo', label: '$(play) 시연 모드 켜기 / 끄기', description: '학술제용 순서 안내' },
       sep('설정'),
       { id: 'url', label: '$(edit) 서버 주소 바꾸기…' },
       { id: 'health', label: '$(refresh) 연결 다시 확인' },
@@ -636,6 +672,9 @@ export function activate(context: vscode.ExtensionContext) {
       case 'walkthrough':
         await vscode.commands.executeCommand('codeMemory.openWalkthrough');
         break;
+      case 'demo':
+        await searchProvider.toggleDemo();
+        break;
     }
   });
 
@@ -681,7 +720,8 @@ export function activate(context: vscode.ExtensionContext) {
   const evaluation = new EvaluationRunner(searchProvider);
   context.subscriptions.push(vscode.commands.registerCommand('codeMemory.runEvaluation', () => evaluation.start()));
   context.subscriptions.push(askAboutSelection, exportFeedback,
-    vscode.commands.registerCommand('codeMemory.openKeySettings', () => searchProvider.openKeySettings()));
+    vscode.commands.registerCommand('codeMemory.openKeySettings', () => searchProvider.openKeySettings()),
+    vscode.commands.registerCommand('codeMemory.toggleDemo', () => searchProvider.toggleDemo()));
 
   // 함수 위 글자(CodeLens) → 그 함수를 선택하고 원래 명령 실행
   const lens = new FunctionLens();

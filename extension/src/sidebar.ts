@@ -169,6 +169,24 @@ export async function searchSnippets(query: string, filter: SearchFilter): Promi
   return { results: check === 'ignored' ? filterLocally(rows, filter) : rows, check };
 }
 
+// 저장 직전 중복 확인 — 그 코드로 검색 한 번 (LLM 0회). 가장 비슷한 게 기준 이상이면 돌려준다
+//   mock 이면 샘플 중 코드가 똑같은 게 있는지만 본다. 검색이 실패하면 null (저장은 그대로 진행)
+export async function findDuplicate(code: string, threshold: number): Promise<{ result: SearchResult; score: number } | null> {
+  const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const config = vscode.workspace.getConfiguration('codeMemory');
+  if (config.get<boolean>('mock', true)) {
+    const hit = mockResults().find((r) => norm(r.code) === norm(code));
+    return hit ? { result: hit, score: 1 } : null;
+  }
+  const q = norm(code).slice(0, 1000);
+  if (!q) {
+    return null;
+  }
+  const { results } = await searchSnippets(q, normalizeFilter({}));
+  const top = results[0];
+  return top && top.score >= threshold ? { result: top, score: top.score } : null;
+}
+
 // 필터 목록 — GET /filters (DB 에 있는 프로젝트·언어). mock 이면 샘플에서 센다
 async function loadFilterOptions(): Promise<FilterOptions> {
   const config = vscode.workspace.getConfiguration('codeMemory');
@@ -535,6 +553,9 @@ interface UiPrefs {
   view: 'full' | 'compact';
   historyOpen: boolean;
   filter?: SearchFilter;   // 검색 범위 (프로젝트·언어) — 다시 열어도 유지
+  reviewSeen?: Record<string, string>;   // 다시 볼 만한 코드: 파일|함수 → 마지막으로 본 시각
+  reviewHidden?: boolean;
+  demo?: { on: boolean; done: string[] };   // 시연 모드
   askHintSeen?: boolean;   // "끝에 ? 를 붙이면 AI" 첫 안내를 닫았는지
 }
 const PREFS_KEY = 'codeMemory.uiPrefs';
@@ -705,6 +726,14 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
       this.view.webview.postMessage({ type: 'keyState', state: await this.keyState(), show });
     }
   }
+  // 시연 모드 켜기/끄기 (명령 팔레트·상태 표시줄 메뉴)
+  public async toggleDemo(): Promise<void> {
+    this.pendingDemo = true;
+    await vscode.commands.executeCommand(`${SearchViewProvider.viewId}.focus`);
+    this.flush();
+  }
+  private pendingDemo = false;
+
   // 제목줄 🔑 / 상태 표시줄 메뉴 → 패널을 열고 키 화면
   public async openKeySettings(): Promise<void> {
     this.pendingKeyPanel = true;
@@ -890,6 +919,10 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
       this.view.webview.postMessage({ type: 'focus' });
       this.pendingFocus = false;
     }
+    if (this.pendingDemo) {
+      this.pendingDemo = false;
+      this.view.webview.postMessage({ type: 'demo' });
+    }
     if (this.pendingKeyPanel) {
       this.pendingKeyPanel = false;
       void this.postKeyState(true);
@@ -915,6 +948,7 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
         apiUrl: config.get<string>('apiUrl', 'http://localhost:8000'),
         askTimeout: clamp(config.get<number>('askTimeoutSeconds'), 1, 300, 45),
         askOnQuestionMark: config.get<boolean>('askOnQuestionMark', true),
+        reviewAfterDays: clamp(config.get<number>('reviewAfterDays'), 0, 365, 7),
       });
     };
     const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
@@ -1489,6 +1523,31 @@ function getHtml(webview: vscode.Webview): string {
   .kradio small { display: block; font-size: 11px; color: var(--vscode-descriptionForeground); }
   .keyp .anote { margin-top: 12px; }
 
+  /* 다시 볼 만한 코드 */
+  .review { margin: 4px 0 10px; }
+  .rv-head { display: flex; align-items: center; justify-content: space-between; font-size: 11px; font-weight: 600; color: var(--vscode-descriptionForeground); margin-bottom: 3px; }
+  .rv { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 6px; border: 0; border-radius: 4px; background: transparent; text-align: left; color: var(--vscode-foreground); }
+  .rv:hover { background: var(--vscode-list-hoverBackground); }
+  .rv-name { font-family: var(--vscode-editor-font-family); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rv-meta { margin-left: auto; flex: none; font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
+
+  /* 시연 모드 */
+  .demo { margin: 4px 0 10px; padding: 8px 10px; border-radius: 6px; font-size: 12px;
+          border: 1px solid color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 40%, transparent);
+          background: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 5%, transparent); }
+  .dm-head { display: flex; align-items: center; gap: 8px; }
+  .dm-head .grow { flex: 1; }
+  .dm-bar { height: 4px; margin: 6px 0 6px; border-radius: 2px; background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); }
+  .dm-bar div { height: 100%; border-radius: 2px; background: var(--vscode-testing-iconPassed, #73c991); }
+  .dm-step { display: flex; align-items: flex-start; gap: 8px; padding: 3px 0; }
+  .dm-ck { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-top: 1px; border-radius: 50%; font-size: 10px;
+           border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, #8886)); color: var(--vscode-descriptionForeground); }
+  .dm-step.done .dm-ck { background: var(--vscode-testing-iconPassed, #73c991); border-color: transparent; color: var(--vscode-editor-background, #111); }
+  .dm-step.done .dm-tx { color: var(--vscode-descriptionForeground); text-decoration: line-through; }
+  .dm-step.now .dm-ck { border-color: var(--vscode-textLink-foreground); color: var(--vscode-textLink-foreground); }
+  .dm-step.now .dm-tx > div:first-child { font-weight: 600; }
+  .dm-hint { font-size: 11px; color: var(--vscode-descriptionForeground); }
+
   /* 처음 화면 단축키 안내 */
   .tipcard { margin: 12px 0 8px; padding: 7px 9px; border-radius: 6px; font-size: 12px;
              border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, #8884)); }
@@ -1619,7 +1678,9 @@ function getHtml(webview: vscode.Webview): string {
   </div>
 
   <div class="content">
+    <div id="demo" class="demo" hidden></div>
     <div id="intro">
+      <div id="review" class="review" hidden></div>
       <div class="intro">검색 예시 — 저장된 코드 찾기</div>
       <div id="chips" class="chips">
         <button type="button" class="chip" data-kind="search">두 숫자를 더하는 함수</button>
@@ -1944,7 +2005,9 @@ function getHtml(webview: vscode.Webview): string {
     const msg = event.data;
     switch (msg.type) {
       case 'config':
-        mode = { mock: !!msg.mock, apiUrl: msg.apiUrl || '', askTimeout: msg.askTimeout || 45, askOnQuestionMark: msg.askOnQuestionMark !== false };
+        mode = { mock: !!msg.mock, apiUrl: msg.apiUrl || '', askTimeout: msg.askTimeout || 45, askOnQuestionMark: msg.askOnQuestionMark !== false,
+          reviewAfterDays: typeof msg.reviewAfterDays === 'number' ? msg.reviewAfterDays : 7 };
+        renderReview();
         banner.hidden = !msg.mock;
         updateMode();
         updateAskHint();
@@ -1953,6 +2016,8 @@ function getHtml(webview: vscode.Webview): string {
         prefs = Object.assign({ view: 'full', historyOpen: false, askHintSeen: false }, msg.prefs || {});
         sfilter = normFilter(prefs.filter);
         renderChips();
+        renderReview();
+        renderDemo();
         updateAskHint();
         vFull.classList.toggle('on', prefs.view === 'full');
         vCompact.classList.toggle('on', prefs.view === 'compact');
@@ -1966,9 +2031,14 @@ function getHtml(webview: vscode.Webview): string {
       case 'history':
         historyItems = msg.items || [];
         renderHistory();
+        renderReview();
         break;
       case 'saved':
         showToast(msg.record);
+        if (msg.record && msg.record.status !== 'fail') { demoDone('save'); if (msg.record.masked) { demoDone('secret'); } }
+        break;
+      case 'demo':
+        setDemo(msg.on === undefined ? !(prefs.demo && prefs.demo.on) : !!msg.on);
         break;
       case 'runSearch':
         input.value = msg.query;
@@ -1989,6 +2059,8 @@ function getHtml(webview: vscode.Webview): string {
         if (msg.query) { lastQuery = msg.query; }
         setResults(lastQuery, msg.results, false, msg.filter, msg.check);
         showSuggest(lastQuery);
+        demoDone('search');
+        if (filterOn(normFilter(msg.filter))) { demoDone('scope'); }
         break;
       case 'error':
         if (msg.reqId !== undefined && msg.reqId !== searchSeq) { break; }
@@ -2012,6 +2084,7 @@ function getHtml(webview: vscode.Webview): string {
         if (msg.reqId !== askSeq) { break; }   // 늦게 온 이전 질문의 답은 버린다
         setAsking(false);
         renderAnswer(msg);
+        demoDone('ask');
         break;
       case 'askError':
         if (msg.reqId !== askSeq) { break; }
@@ -2171,6 +2244,123 @@ function getHtml(webview: vscode.Webview): string {
   function hintOf(id) {
     const p = KEY_PROVIDERS.find(function (x) { return x.id === id; });
     return (p ? p.hint : '') + '  (붙여넣기)';
+  }
+
+  // ── 다시 볼 만한 코드 (처음 화면) — 저장 기록에서 며칠 지났고 아직 다시 안 본 코드 3개. 내 PC 기록만 쓴다
+  const reviewBox = byId('review');
+  function reviewKey(fn, file) { return (file || '') + '|' + (fn || ''); }
+  function markSeen(fn, file) {
+    const seen = Object.assign({}, prefs.reviewSeen || {});
+    seen[reviewKey(fn, file)] = new Date().toISOString();
+    const keys = Object.keys(seen);
+    if (keys.length > 200) { keys.sort(function (a, b) { return seen[a] < seen[b] ? -1 : 1; }).slice(0, keys.length - 200).forEach(function (k) { delete seen[k]; }); }
+    prefs.reviewSeen = seen;
+    vscode.postMessage({ type: 'prefs', prefs: prefs });
+    renderReview();
+  }
+  function reviewCandidates() {
+    const days = typeof mode.reviewAfterDays === 'number' ? mode.reviewAfterDays : 7;
+    const seen = prefs.reviewSeen || {};
+    const now = Date.now();
+    const used = {};
+    const out = [];
+    historyItems.forEach(function (h) {
+      if (h.status !== 'ok' && h.status !== 'mock') { return; }
+      const k = reviewKey(h.function_name, h.file_path);
+      if (used[k]) { return; }   // 같은 함수는 가장 최근 저장 하나만
+      used[k] = true;
+      const t = new Date(h.time).getTime();
+      const age = (now - t) / 86400000;
+      if (!(age >= days)) { return; }
+      if (seen[k] && new Date(seen[k]).getTime() > t) { return; }   // 저장 뒤에 이미 다시 봤으면 빼기
+      out.push({ h: h, age: age });
+    });
+    out.sort(function (a, b) { return b.age - a.age; });
+    return out.slice(0, 3);
+  }
+  function renderReview() {
+    const items = reviewCandidates();
+    reviewBox.replaceChildren();
+    if (!items.length) { reviewBox.hidden = true; return; }
+    reviewBox.hidden = false;
+    if (prefs.reviewHidden) {
+      const more = el('button', 'link-btn', '다시 볼 만한 코드 ' + items.length + '개 보기');
+      more.type = 'button';
+      more.addEventListener('click', function () { prefs.reviewHidden = false; vscode.postMessage({ type: 'prefs', prefs: prefs }); renderReview(); });
+      reviewBox.append(more);
+      return;
+    }
+    const head = el('div', 'rv-head');
+    const hide = el('button', 'link-btn', '숨기기');
+    hide.type = 'button';
+    hide.addEventListener('click', function () { prefs.reviewHidden = true; vscode.postMessage({ type: 'prefs', prefs: prefs }); renderReview(); });
+    head.append(el('span', '', '다시 볼 만한 코드'), hide);
+    reviewBox.append(head);
+    items.forEach(function (it) {
+      const h = it.h;
+      const name = h.function_name || String(h.file_path || '').split('/').pop();
+      const row = el('button', 'rv');
+      row.type = 'button';
+      const d = Math.floor(it.age);
+      row.append(el('span', 'rv-name', name), el('span', 'rv-meta', String(h.file_path || '').split('/').pop() + ' · ' + (d < 1 ? '오늘' : d + '일 전') + ' 저장'));
+      row.title = '"' + name + '" 검색해서 다시 보기';
+      row.addEventListener('click', function () { markSeen(h.function_name, h.file_path); search(name); });
+      reviewBox.append(row);
+    });
+  }
+
+  // ── 시연 모드 (학술제용) — 순서 안내, 실제로 그 기능을 쓰면 자동 체크
+  const demoBox = byId('demo');
+  const DEMO_STEPS = [
+    ['save', '코드 저장', '함수 위 💾 저장 또는 Ctrl+Alt+S'],
+    ['search', '말로 검색', '예: "두 숫자를 더하는 함수"'],
+    ['scope', '범위로 좁히기', '검색창 아래 프로젝트·언어 칩'],
+    ['ask', 'AI에게 묻기', '예: "0으로 나누면 뭘 반환해?" — 끝에 ?'],
+    ['stale', '원본 바뀜 보여주기', '파일을 고친 뒤 다시 검색 → 바뀐 부분 보기'],
+    ['secret', '비밀값 가리고 저장', '키가 든 함수를 저장 → 가리고 저장'],
+  ];
+  function demoDone(id) {
+    if (!prefs.demo || !prefs.demo.on || prefs.demo.done.indexOf(id) >= 0) { return; }
+    prefs.demo.done.push(id);
+    vscode.postMessage({ type: 'prefs', prefs: prefs });
+    renderDemo();
+  }
+  function setDemo(on) {
+    prefs.demo = { on: on, done: on ? [] : ((prefs.demo && prefs.demo.done) || []) };
+    vscode.postMessage({ type: 'prefs', prefs: prefs });
+    renderDemo();
+  }
+  function renderDemo() {
+    const d = prefs.demo;
+    if (!d || !d.on) { demoBox.hidden = true; demoBox.replaceChildren(); return; }
+    demoBox.hidden = false;
+    const done = DEMO_STEPS.filter(function (s) { return d.done.indexOf(s[0]) >= 0; }).length;
+    const head = el('div', 'dm-head');
+    const reset = el('button', 'link-btn', '처음부터');
+    reset.type = 'button';
+    reset.addEventListener('click', function () { setDemo(true); });
+    const end = el('button', 'link-btn', '끝내기');
+    end.type = 'button';
+    end.addEventListener('click', function () { setDemo(false); });
+    head.append(el('strong', '', done === DEMO_STEPS.length ? '시연 순서 · 다 했어요' : '시연 순서 · ' + done + ' / ' + DEMO_STEPS.length), el('span', 'grow'), reset, end);
+    const bar = el('div', 'dm-bar');
+    const fill = el('div');
+    fill.style.width = Math.round(done / DEMO_STEPS.length * 100) + '%';
+    bar.append(fill);
+    demoBox.replaceChildren(head, bar);
+    let nowSet = false;
+    DEMO_STEPS.forEach(function (s, i) {
+      const isDone = d.done.indexOf(s[0]) >= 0;
+      const isNow = !isDone && !nowSet;
+      if (isNow) { nowSet = true; }
+      const row = el('div', 'dm-step' + (isDone ? ' done' : isNow ? ' now' : ''));
+      const ck = el('span', 'dm-ck', isDone ? '✓' : String(i + 1));
+      const tx = el('div', 'dm-tx');
+      tx.append(el('div', '', s[1]));
+      if (isNow) { tx.append(el('div', 'dm-hint', s[2])); }
+      row.append(ck, tx);
+      demoBox.append(row);
+    });
   }
 
   function setResults(query, results, restored, usedFilter, check) {
@@ -2508,7 +2698,7 @@ function getHtml(webview: vscode.Webview): string {
           srcBanner = el('div', 'srcwarn');
           const diffBtn = el('button', 'link-btn', '바뀐 부분 보기');
           diffBtn.type = 'button';
-          diffBtn.addEventListener('click', function () { vscode.postMessage({ type: 'compareSource', result: r }); });
+          diffBtn.addEventListener('click', function () { demoDone('stale'); vscode.postMessage({ type: 'compareSource', result: r }); });
           const resaveBtn = el('button', 'link-btn', '지금 내용으로 다시 저장');
           resaveBtn.type = 'button';
           resaveBtn.title = '지금 파일의 이 함수를 새로 저장해요 (기존 저장본은 그대로 둬요)';
@@ -2617,6 +2807,7 @@ function getHtml(webview: vscode.Webview): string {
 
   // 위치가 옮겨진 원본은 새 위치로 연다
   function openResult(r) {
+    markSeen(r.function_name, r.file_path);
     const target = r.source === 'moved' && r.moved_start ? Object.assign({}, r, { start_line: r.moved_start, end_line: r.moved_end }) : r;
     vscode.postMessage({ type: 'open', result: target });
   }
