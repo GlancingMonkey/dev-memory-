@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import {
   addUsage, answerToMarkdown, askCacheKey, AskError, askErrorFor, AskResponse, AskSource, AskTurn, buildAskRequest, buildSearchUrl,
-  checkAppliedFilter, clamp, EmbeddingStatus, endsWithQuestionMark, errorDetailText, FILTER_MAX_LENGTH, FilterCheck, filterLocally,
+  checkAppliedFilter, clamp, compareSource, pickSymbol, SimpleSymbol, SourceState, EmbeddingStatus, endsWithQuestionMark, errorDetailText, FILTER_MAX_LENGTH, FilterCheck, filterLocally,
   FilterOptions, hasFilter, isVagueQuestion, localDateKey, looksLikeQuestion, normalizeFilter, parseAskResponse, parseFilterOptions,
   parseSse, reindent, SearchFilter, todayUsage, UsageDay,
 } from './logic';
@@ -24,7 +24,7 @@ export interface SearchResult {
 
 // mock 결과 — docs/DEVELOPMENT.md의 로컬 테스트 코드 3개; 원본 열기에는 실제 파일이 필요
 // absolute_path 를 일부러 안 넣었다: 실제 API 결과처럼 "열린 폴더 이름 + 상대 경로"로 찾는 길을 그대로 테스트
-const MOCK_RESULTS: SearchResult[] = [
+const MOCK_SAMPLES: SearchResult[] = [
   {
     id: 1,
     project_name: 'mvp-save-test',
@@ -83,6 +83,13 @@ const MOCK_RESULTS: SearchResult[] = [
   },
 ];
 
+// mock 샘플은 원본 열기·원본 비교를 시험할 수 있게, 열린 폴더가 있으면 기본 샘플(mvp-save-test)을 그 폴더 이름으로 바꿔서 쓴다
+//   (예: 열린 폴더에 sample.py 가 있으면 add 샘플의 원본으로 잡힌다). 실제 서버 모드와는 상관없다
+function mockResults(): SearchResult[] {
+  const folder = vscode.workspace.workspaceFolders?.[0]?.name;
+  return MOCK_SAMPLES.map((r) => (folder && r.project_name === 'mvp-save-test' ? { ...r, project_name: folder } : r));
+}
+
 // ─────────────────────────────────────────────
 // 검색 — GET /search (mock 이면 샘플 반환)
 // ─────────────────────────────────────────────
@@ -111,7 +118,7 @@ async function searchSnippets(query: string, filter: SearchFilter): Promise<Sear
   if (config.get<boolean>('mock', true)) {
     await new Promise((resolve) => setTimeout(resolve, 300));
     // mock 은 검색어와 상관없이 샘플. 필터는 서버처럼 먼저 걸러서 돌려준다
-    return { results: filterLocally(MOCK_RESULTS, filter), check: hasFilter(filter) ? 'applied' : 'none' };
+    return { results: filterLocally(mockResults(), filter), check: hasFilter(filter) ? 'applied' : 'none' };
   }
 
   // API_CONTRACT.md: GET /search?q=...&limit=N[&project=..&language=..] → { results: [...], filters?: {...} }
@@ -167,7 +174,7 @@ async function loadFilterOptions(): Promise<FilterOptions> {
   if (config.get<boolean>('mock', true)) {
     const count = (key: 'project_name' | 'language') => {
       const m = new Map<string, number>();
-      MOCK_RESULTS.forEach((r) => { const k = r[key] ?? ''; if (k) { m.set(k, (m.get(k) ?? 0) + 1); } });
+      mockResults().forEach((r) => { const k = r[key] ?? ''; if (k) { m.set(k, (m.get(k) ?? 0) + 1); } });
       return [...m].map(([name, n]) => ({ name, count: n }));
     };
     return { projects: count('project_name'), languages: count('language') };
@@ -224,7 +231,7 @@ async function askMock(q: string, opts: AskOptions): Promise<AskResponse> {
   if (q.includes('#근거부족')) {
     return parseAskResponse(JSON.stringify({ status: 'insufficient_context', answer: '', sources: [], model: null, usage: null }));
   }
-  const [add, even, sortUsers] = MOCK_RESULTS;
+  const [add, even, sortUsers] = mockResults();
   const follow = opts.history.length > 0;
   const sources = follow
     ? [{ citation_id: 'S1', ...add }]
@@ -434,6 +441,8 @@ type FromWebview =
   | { type: 'prefs'; prefs: UiPrefs }
   | { type: 'switchMode' }
   | { type: 'compare'; result: SearchResult }
+  | { type: 'compareSource'; result: SearchResult }
+  | { type: 'resave'; result: SearchResult }
   | { type: 'walkthrough' }
   | { type: 'ask'; q: string; reqId: number; history?: AskTurn[]; fresh?: boolean }
   | { type: 'askCancel'; reqId: number }
@@ -481,6 +490,7 @@ export interface SaveRecord {
   error?: string;
   elapsedMs?: number;              // 요청~응답 걸린 시간
   embedding?: EmbeddingStatus | null;  // null이면 원문은 저장됐지만 검색 준비 상태는 미확정
+  masked?: number;                 // 저장 전에 가린 비밀값 수
 }
 const HISTORY_KEY = 'codeMemory.saveHistory';
 const HISTORY_MAX = 20;
@@ -525,19 +535,74 @@ function toRecent(v: unknown): RecentItem | null {
 //   ok: 열 수 있음 / no_folder: 그 프로젝트 폴더가 안 열려 있음 / missing: 폴더는 있는데 파일이 없음
 type LocalStatus = 'ok' | 'no_folder' | 'missing';
 
-async function withLocalStatus<T extends SearchResult>(results: T[]): Promise<(T & { local: LocalStatus })[]> {
-  return Promise.all(results.map(async (r) => {
+// 원본을 열 수 있으면 저장한 코드와 지금 파일도 비교한다
+//   source: same(그대로) / moved(위치만 바뀜 → moved_start~moved_end) / changed(내용이 바뀜)
+type WithLocal<T> = T & { local: LocalStatus; source?: SourceState; moved_start?: number; moved_end?: number };
+const SOURCE_READ_MAX = 2 * 1024 * 1024;   // 이보다 큰 파일은 비교하지 않는다
+
+async function withLocalStatus<T extends SearchResult>(results: T[]): Promise<WithLocal<T>[]> {
+  const files = new Map<string, Promise<string | null>>();   // 같은 파일은 한 번만 읽는다
+  const read = (uri: vscode.Uri) => {
+    const key = uri.toString();
+    if (!files.has(key)) {
+      files.set(key, (async () => {
+        try {
+          const stat = await vscode.workspace.fs.stat(uri);
+          if (stat.size > SOURCE_READ_MAX) {
+            return '';
+          }
+          return new TextDecoder('utf-8').decode(await vscode.workspace.fs.readFile(uri));
+        } catch {
+          return null;
+        }
+      })());
+    }
+    return files.get(key)!;
+  };
+  return Promise.all(results.map(async (r): Promise<WithLocal<T>> => {
     const uri = resolveUri(r);
     if (!uri) {
-      return { ...r, local: 'no_folder' as const };
+      return { ...r, local: 'no_folder' };
     }
-    try {
-      await vscode.workspace.fs.stat(uri);
-      return { ...r, local: 'ok' as const };
-    } catch {
-      return { ...r, local: 'missing' as const };
+    const text = await read(uri);
+    if (text === null) {
+      return { ...r, local: 'missing' };
     }
+    if (!text) {
+      return { ...r, local: 'ok' };   // 너무 큰 파일 — 비교 생략
+    }
+    const check = compareSource(r.code, text, r.start_line, r.end_line);
+    return { ...r, local: 'ok', source: check.state, moved_start: check.start, moved_end: check.end };
   }));
+}
+
+// 지금 파일에서 그 함수가 있는 범위 — 코드 구조(기호)로 찾고, 없으면 저장 때 줄 범위
+const FN_KINDS = new Set([vscode.SymbolKind.Function, vscode.SymbolKind.Method, vscode.SymbolKind.Constructor]);
+function toSimple(s: vscode.DocumentSymbol | vscode.SymbolInformation): SimpleSymbol {
+  const range = 'children' in s ? s.range : s.location.range;
+  return {
+    name: s.name,
+    kind: FN_KINDS.has(s.kind) ? 'function' : s.kind === vscode.SymbolKind.Class ? 'class' : 'other',
+    startLine: range.start.line, endLine: range.end.line,
+    children: 'children' in s ? s.children.map(toSimple) : [],
+  };
+}
+async function currentRange(doc: vscode.TextDocument, r: SearchResult): Promise<vscode.Range> {
+  const line = Math.min(Math.max(0, r.start_line - 1), doc.lineCount - 1);
+  let start = line;
+  let end = Math.min(Math.max(line, r.end_line - 1), doc.lineCount - 1);
+  try {
+    const symbols = await vscode.commands.executeCommand<(vscode.DocumentSymbol | vscode.SymbolInformation)[] | undefined>(
+      'vscode.executeDocumentSymbolProvider', doc.uri);
+    const { fn } = pickSymbol((symbols ?? []).map(toSimple), line);
+    if (fn) {
+      start = fn.startLine;
+      end = Math.min(fn.endLine, doc.lineCount - 1);
+    }
+  } catch {
+    // 기호를 못 받으면 저장 때 줄 범위
+  }
+  return new vscode.Range(start, 0, end, doc.lineAt(end).text.length);
 }
 
 // ─────────────────────────────────────────────
@@ -661,6 +726,43 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
     const leftUri = compareDocs.put(`${left.label}${ext}`, left.code);
     const rightUri = compareDocs.put(`${name} (id ${r.id})${ext}`, r.code);
     await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, `${left.label} ↔ ${name} (id ${r.id})`);
+  }
+
+  // "바뀐 부분 보기": 왼쪽 = 저장한 코드, 오른쪽 = 지금 파일의 그 함수
+  private async diffWithSource(r: SearchResult): Promise<void> {
+    const uri = resolveUri(r);
+    if (!uri) {
+      vscode.window.showWarningMessage('원본 파일을 찾을 수 없습니다.');
+      return;
+    }
+    let doc: vscode.TextDocument;
+    try {
+      doc = await vscode.workspace.openTextDocument(uri);
+    } catch {
+      vscode.window.showWarningMessage(`원본 파일을 찾을 수 없습니다: ${r.file_path}`);
+      return;
+    }
+    const range = await currentRange(doc, r);
+    const name = r.function_name ?? r.file_path.split('/').pop() ?? 'snippet';
+    const ext = r.file_path.includes('.') ? r.file_path.slice(r.file_path.lastIndexOf('.')) : '';
+    const left = compareDocs.put(`저장한 코드 (id ${r.id})${ext}`, r.code);
+    const right = compareDocs.put(`지금 파일 ${r.file_path.split('/').pop()} ${range.start.line + 1}-${range.end.line + 1}${ext}`, doc.getText(range));
+    await vscode.commands.executeCommand('vscode.diff', left, right, `${name}: 저장한 코드 ↔ 지금 파일`);
+  }
+
+  // "다시 저장": 지금 파일의 그 함수를 선택하고 저장 명령 실행 (기존 행은 그대로 둔다)
+  private async resave(r: SearchResult): Promise<void> {
+    const uri = resolveUri(r);
+    if (!uri) {
+      vscode.window.showWarningMessage('원본 파일을 찾을 수 없습니다.');
+      return;
+    }
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const range = await currentRange(doc, r);
+    const editor = await vscode.window.showTextDocument(doc, { preview: false });
+    editor.selection = new vscode.Selection(range.start, range.end);
+    editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    await vscode.commands.executeCommand('codeMemory.saveSnippet');
   }
 
   // 최근 검색어 — 같은 문장·같은 종류는 맨 앞으로, 최대 5개
@@ -891,6 +993,14 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
           await this.compare(msg.result);
           break;
         }
+        case 'compareSource': {
+          await this.diffWithSource(msg.result);
+          break;
+        }
+        case 'resave': {
+          await this.resave(msg.result);
+          break;
+        }
         case 'walkthrough': {
           await vscode.commands.executeCommand('codeMemory.openWalkthrough');
           break;
@@ -966,8 +1076,9 @@ function getHtml(webview: vscode.Webview): string {
   .recent-item.active { color: var(--vscode-list-activeSelectionForeground); background: var(--vscode-list-activeSelectionBackground); }
 
   /* 요약줄: 결과 수 · 자세히/간단히 · 기록 복사 · 지우기 */
-  .bar { display: flex; align-items: center; gap: 4px; min-height: 22px; margin: 0 0 4px; font-size: 11px; color: var(--vscode-descriptionForeground); }
-  .bar .grow { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden; }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; min-height: 22px; margin: 0 0 4px; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .bar .grow { flex: 1 1 170px; min-width: 0; display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden; }   /* 이보다 좁으면 버튼이 아랫줄로 */
+  .bar .tools { margin-left: auto; }
   .bar .sq { flex: 0 1 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; color: var(--vscode-foreground); }
   .bar .sdot, .bar .sc { flex: none; }
   .tools { display: flex; align-items: center; gap: 2px; flex: none; }
@@ -1045,6 +1156,14 @@ function getHtml(webview: vscode.Webview): string {
   .loc a, .where.ok { color: var(--vscode-textLink-foreground); text-decoration: none; }
   .loc a:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
   .loc-off { color: var(--vscode-descriptionForeground); }
+  .loc-old { color: var(--vscode-descriptionForeground); text-decoration: line-through; }
+  .stag { margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 10.5px; white-space: nowrap; border: 1px solid; flex: none; }
+  .stag.ok { color: var(--vscode-testing-iconPassed, #73c991); border-color: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 45%, transparent); opacity: 0.85; }
+  .stag.i { color: var(--vscode-textLink-foreground); border-color: color-mix(in srgb, var(--vscode-textLink-foreground) 50%, transparent); }
+  .stag.w { color: var(--vscode-editorWarning-foreground); border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground) 50%, transparent); }
+  .srcwarn { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 4px 0 2px 28px; padding: 4px 8px; font-size: 11.5px;
+             border-radius: 0 4px 4px 0; border-left: 3px solid var(--vscode-editorWarning-foreground);
+             background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 10%, transparent); }
   .tag { margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 10.5px; white-space: nowrap;
          color: var(--vscode-editorWarning-foreground);
          border: 1px solid color-mix(in srgb, var(--vscode-editorWarning-foreground) 50%, transparent); }
@@ -2019,7 +2138,17 @@ function getHtml(webview: vscode.Webview): string {
     const why = r.local === 'no_folder'
       ? '이 PC 에서 ' + (r.project_name || '(프로젝트 없음)') + ' 폴더가 열려 있지 않습니다'
       : '열린 프로젝트 폴더에 이 파일이 없습니다';
+    if (r.source === 'moved' && r.moved_start) {
+      const nr = r.moved_start === r.moved_end ? String(r.moved_start) : r.moved_start + '–' + r.moved_end;
+      return { where: nr + '줄', oldWhere: r.file_path + ' : ' + range, canOpen: canOpen, why: why };
+    }
     return { where: r.file_path + ' : ' + range, canOpen: canOpen, why: why };
+  }
+
+  function srcTag(kind, text, title) {
+    const s = el('span', 'stag ' + kind, text);
+    s.title = title;
+    return s;
   }
 
   function langDot(lang) {
@@ -2054,12 +2183,32 @@ function getHtml(webview: vscode.Webview): string {
 
     // 2줄: 파일 : 줄 범위 (누르면 원본 열기). 이 PC 에 원본이 없으면 흐린 글자 + "원본 없음"
     const loc = el('div', 'loc');
+    let srcBanner = null;
     if (info.canOpen) {
       const link = el('a', '', info.where);
       link.href = '#';
       link.title = '원본 열기';
       link.addEventListener('click', function (e) { e.preventDefault(); openResult(r); });
-      loc.append(link);
+      // 저장한 코드와 지금 파일 비교 결과
+      if (r.source === 'moved') {
+        loc.append(el('span', 'loc-old', info.oldWhere), document.createTextNode(' → '), link, srcTag('i', '위치 이동',
+          '저장 뒤 위아래 코드가 바뀌어서 ' + r.moved_start + '–' + r.moved_end + '줄로 옮겨졌어요. 원본 열기는 새 위치로 가요.'));
+      } else {
+        loc.append(link);
+        if (r.source === 'same') { loc.append(srcTag('ok', '원본 같음', '저장한 코드와 지금 파일 내용이 같아요')); }
+        if (r.source === 'changed') {
+          loc.append(srcTag('w', '원본 바뀜', '저장한 코드와 지금 파일 내용이 달라요'));
+          srcBanner = el('div', 'srcwarn');
+          const diffBtn = el('button', 'link-btn', '바뀐 부분 보기');
+          diffBtn.type = 'button';
+          diffBtn.addEventListener('click', function () { vscode.postMessage({ type: 'compareSource', result: r }); });
+          const resaveBtn = el('button', 'link-btn', '지금 내용으로 다시 저장');
+          resaveBtn.type = 'button';
+          resaveBtn.title = '지금 파일의 이 함수를 새로 저장해요 (기존 저장본은 그대로 둬요)';
+          resaveBtn.addEventListener('click', function () { vscode.postMessage({ type: 'resave', result: r }); });
+          srcBanner.append(el('span', '', '저장한 코드와 지금 파일 내용이 달라요'), diffBtn, resaveBtn);
+        }
+      }
     } else {
       const tag = el('span', 'tag', '원본 없음');
       tag.title = info.why;
@@ -2069,7 +2218,9 @@ function getHtml(webview: vscode.Webview): string {
     // 3줄: 언어 색 점 · 언어 · 프로젝트 · id (Swagger 결과와 대조용)
     const sub = el('div', 'sub');
     sub.append(langDot(r.language), el('span', '', r.language + ' · ' + (r.project_name || '-') + ' · id ' + r.id));
-    c.append(head, loc, sub);
+    c.append(head, loc);
+    if (srcBanner) { c.append(srcBanner); }
+    c.append(sub);
 
     // 코드 — 실제 줄 번호(start_line 부터)와 함께
     const lines = String(r.code || '').replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');
@@ -2110,8 +2261,11 @@ function getHtml(webview: vscode.Webview): string {
   function compactRow(r, i) {
     const info = locInfo(r);
     const c = el('div', 'card compact' + (r.rank === 1 ? ' top' : '') + (info.canOpen ? '' : ' off'));
-    const where = el('span', info.canOpen ? 'where ok' : 'where', info.where);
-    c.append(el('span', 'rank', String(r.rank)), langDot(r.language), el('span', 'name', nameOf(r)), where, simEl(r));
+    const where = el('span', info.canOpen ? 'where ok' : 'where', info.oldWhere ? r.file_path + ' : ' + info.where : info.where);
+    c.append(el('span', 'rank', String(r.rank)), langDot(r.language), el('span', 'name', nameOf(r)), where);
+    if (r.source === 'moved') { c.append(srcTag('i', '이동', '위치 이동: ' + r.moved_start + '–' + r.moved_end + '줄')); }
+    if (r.source === 'changed') { c.append(srcTag('w', '바뀜', '저장한 코드와 지금 파일 내용이 달라요')); }
+    c.append(simEl(r));
     c.title = (info.canOpen ? '눌러서 원본 열기' : info.why) + ' · ↑↓ 이동 · C 복사 · I 삽입 · D 비교 · Esc 검색창';
     c.addEventListener('click', function () { if (info.canOpen) { openResult(r); } });
     keyboard(c, r, i, info.canOpen, function () { copyCode(r, null); showToast({ status: 'copy', function_name: nameOf(r) }); });
@@ -2154,7 +2308,11 @@ function getHtml(webview: vscode.Webview): string {
     return true;
   }
 
-  function openResult(r) { vscode.postMessage({ type: 'open', result: r }); }
+  // 위치가 옮겨진 원본은 새 위치로 연다
+  function openResult(r) {
+    const target = r.source === 'moved' && r.moved_start ? Object.assign({}, r, { start_line: r.moved_start, end_line: r.moved_end }) : r;
+    vscode.postMessage({ type: 'open', result: target });
+  }
   function compareResult(r) { vscode.postMessage({ type: 'compare', result: r }); }
   function insertCode(r) { vscode.postMessage({ type: 'insert', code: r.code }); }
   function copyCode(r, btn) {
@@ -2195,7 +2353,13 @@ function getHtml(webview: vscode.Webview): string {
       parts.push(h.error ? h.error : h.file_path + ':' + h.start_line + '-' + h.end_line);
       const p = pillOf(h);
       const pill = el('span', 'pill ' + p.cls, p.text);
-      row.append(el('span', 'fnm', name), el('span', 'meta', parts.join(' · ')), pill);
+      row.append(el('span', 'fnm', name), el('span', 'meta', parts.join(' · ')));
+      if (h.masked) {
+        const mp = el('span', 'pill mock', '가림 ' + h.masked);
+        mp.title = '저장 전에 비밀값 ' + h.masked + '개를 가렸어요';
+        row.append(mp);
+      }
+      row.append(pill);
       row.title = '눌러서 "' + name + '" 검색' + (h.error ? ' — ' + h.error : '');
       row.addEventListener('click', function () { input.value = name; search(name); });
       histBody.append(row);
@@ -2236,6 +2400,7 @@ function getHtml(webview: vscode.Webview): string {
     else if (rec.status === 'mock') { text = '[mock] 저장 흉내 · ' + name; }
     else if (rec.status === 'copy') { text = '복사됨 · ' + name; }
     else { text = '저장 실패 · ' + name; }
+    if (rec.masked && rec.status !== 'copy') { text += ' · 비밀값 ' + rec.masked + '개 가림'; }
     toast.replaceChildren(icon(rec.status === 'fail' || warning ? 'alert' : 'check'), el('span', 'grow', text));
     if ((rec.status === 'ok' && rec.embedding === 'ready') || rec.status === 'mock') {
       const go = el('button', 'link-btn', '검색에서 확인');

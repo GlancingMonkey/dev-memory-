@@ -587,6 +587,140 @@ export function parseFilterOptions(text: string): FilterOptions {
   return { projects: read('projects'), languages: read('languages') };
 }
 
+// ── 11. 저장 전 비밀값 감지 — LLM 없이 규칙으로만. 서버로 보낼 코드에서만 가리고 사용자 파일은 안 건드린다
+export type SecretKind = 'api_key' | 'private_key' | 'password' | 'url_password' | 'jwt';
+export interface SecretFinding {
+  kind: SecretKind;
+  label: string;   // 화면에 보일 이름 (예: "API 키 (OpenAI)")
+  line: number;    // 코드 안에서 몇 번째 줄인지 (1부터)
+  start: number;   // 가릴 부분 — code 문자열 위치
+  end: number;
+  keep: number;    // 앞에서 남길 글자 수 (뭐였는지 알아볼 수 있게)
+}
+
+// 예시·자리표시 값은 비밀값으로 보지 않는다
+function isPlaceholder(v: string): boolean {
+  const s = v.trim();
+  return s.length < 4
+    || /^\*+$/.test(s)
+    || /^<.*>$/.test(s)
+    || /^\$\{.*\}$/.test(s) || /^\{\{.*\}\}$/.test(s)
+    || /^(x{3,}|changeme|change_me|your[_-]?.*|example.*|dummy.*|placeholder.*|sample.*|test|none|null|todo|password|secret|token)$/i.test(s)
+    || /\*{4}$/.test(s);
+}
+
+export function scanSecrets(code: string): SecretFinding[] {
+  const found: SecretFinding[] = [];
+  const lineOf = (pos: number) => code.slice(0, pos).split('\n').length;
+  const add = (kind: SecretKind, label: string, start: number, end: number, keep: number) => {
+    if (end <= start || found.some((f) => start < f.end && end > f.start)) {
+      return;   // 이미 찾은 범위와 겹치면 건너뜀
+    }
+    found.push({ kind, label, line: lineOf(start), start, end, keep });
+  };
+  const each = (re: RegExp, fn: (m: RegExpExecArray) => void) => {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(code)) !== null) {
+      fn(m);
+      if (m[0].length === 0) {
+        re.lastIndex++;
+      }
+    }
+  };
+
+  // 1) 개인 키 블록 — 머리·꼬리 줄은 남기고 내용만
+  each(/-----BEGIN ([A-Z ]*)PRIVATE KEY-----([\s\S]*?)(-----END [A-Z ]*PRIVATE KEY-----|$)/g, (m) => {
+    const bodyStart = m.index + m[0].indexOf(m[2]);
+    add('private_key', '개인 키', bodyStart, bodyStart + m[2].length, 0);
+  });
+  // 2) 모양으로 알 수 있는 키
+  const keys: [RegExp, string, number][] = [
+    [/\bsk-(?:proj-|live-|test-|ant-)?[A-Za-z0-9_-]{20,}/g, 'API 키 (sk-…)', 8],
+    [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, 'AWS 액세스 키', 4],
+    [/\bgh[pousr]_[A-Za-z0-9]{30,}\b/g, 'GitHub 토큰', 4],
+    [/\bgithub_pat_[A-Za-z0-9_]{22,}\b/g, 'GitHub 토큰', 11],
+    [/\bAIza[0-9A-Za-z_-]{35}\b/g, 'Google API 키', 4],
+    [/\bxox[abposr]-[A-Za-z0-9-]{10,}\b/g, 'Slack 토큰', 5],
+    [/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, 'JWT 토큰', 3],
+  ];
+  for (const [re, label, keep] of keys) {
+    each(re, (m) => add(re.source.startsWith('\\beyJ') ? 'jwt' : 'api_key', label, m.index, m.index + m[0].length, Math.min(keep, m[0].length)));
+  }
+  // 3) 주소 안 비밀번호  scheme://user:비번@host
+  each(/\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/'"]+:([^\s@/'"]+)@/gi, (m) => {
+    if (isPlaceholder(m[1])) {
+      return;
+    }
+    const s = m.index + m[0].lastIndexOf(m[1] + '@');
+    add('url_password', '주소 안 비밀번호', s, s + m[1].length, 0);
+  });
+  // 4) 이름이 수상한 변수에 문자열을 넣은 것  password = "…"
+  each(/([A-Za-z_][\w.-]*?(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|auth[_-]?key|credential)[\w-]*)["']?\s*(?:[:=]|=>)\s*(["'`])([^"'`\n]+)\2/gi, (m) => {
+    if (isPlaceholder(m[3])) {
+      return;
+    }
+    const s = m.index + m[0].lastIndexOf(m[2] + m[3] + m[2]) + 1;
+    add('password', '비밀번호·토큰 (' + m[1] + ')', s, s + m[3].length, 0);
+  });
+  return found.sort((a, b) => a.start - b.start);
+}
+
+// 찾은 부분을 가린다 — 앞 keep 글자 + "****"
+export function maskSecrets(code: string, findings: SecretFinding[]): string {
+  let out = '';
+  let pos = 0;
+  for (const f of [...findings].sort((a, b) => a.start - b.start)) {
+    if (f.start < pos) {
+      continue;
+    }
+    const value = code.slice(f.start, f.end);
+    const masked = f.kind === 'private_key' ? '\n****\n' : value.slice(0, f.keep) + '****';
+    out += code.slice(pos, f.start) + masked;
+    pos = f.end;
+  }
+  return out + code.slice(pos);
+}
+
+// ── 12. 검색 결과의 원본이 바뀌었는지 — 저장한 코드와 지금 파일 비교
+//    줄바꿈(CRLF)·줄 끝 공백 차이는 같은 걸로 본다
+export type SourceState = 'same' | 'moved' | 'changed';
+export interface SourceCheck {
+  state: SourceState;
+  start?: number;   // moved 일 때 새 위치 (1부터)
+  end?: number;
+}
+function normLines(text: string): string[] {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/\s+$/, ''));
+  while (lines.length && lines[lines.length - 1] === '') {
+    lines.pop();
+  }
+  return lines;
+}
+export function compareSource(saved: string, fileText: string, startLine: number, endLine: number): SourceCheck {
+  const want = normLines(saved);
+  const file = fileText.replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/\s+$/, ''));
+  if (!want.length) {
+    return { state: 'changed' };
+  }
+  const same = (at: number) => at >= 0 && at + want.length <= file.length && want.every((l, i) => file[at + i] === l);
+  const at = startLine - 1;
+  if (same(at) && (endLine - startLine + 1 >= want.length)) {
+    return { state: 'same' };
+  }
+  // 다른 위치에 그대로 있으면 위치 이동 — 원래 자리에서 가까운 곳 우선
+  let best = -1;
+  for (let i = 0; i + want.length <= file.length; i++) {
+    if (same(i) && (best < 0 || Math.abs(i - at) < Math.abs(best - at))) {
+      best = i;
+    }
+  }
+  if (best >= 0) {
+    return best === at ? { state: 'same' } : { state: 'moved', start: best + 1, end: best + want.length };
+  }
+  return { state: 'changed' };
+}
+
 // ── 8. 기타
 export function formatSeconds(ms: number): string {
   return `${(ms / 1000).toFixed(2)}초`;

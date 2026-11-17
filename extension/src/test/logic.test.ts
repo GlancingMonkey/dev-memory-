@@ -1,7 +1,7 @@
 // logic.ts 단위 테스트 — VS Code 없이 돌아간다: npm run test:unit
 import * as assert from 'assert';
 import {
-  addUsage, adjustEndLine, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
+  addUsage, adjustEndLine, compareSource, maskSecrets, scanSecrets, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
 } from '../logic';
 
 const linesOf = (src: string) => {
@@ -365,5 +365,63 @@ suite('검색 필터 — GET /search?project=&language= · GET /filters', () => 
       assert.strictEqual((e as AskError).kind, 'unavailable');
       assert.strictEqual((e as AskError).detail, 'AI 질문을 처리할 수 없습니다.');
     }
+  });
+});
+
+suite('저장 전 비밀값 감지 — scanSecrets / maskSecrets', () => {
+  test('모양으로 알 수 있는 키 + 이름이 수상한 변수', () => {
+    const code = 'def call():\n    key = "sk-proj-AbCdEfGhIjKlMnOpQrStUvWx12"\n    db_password = "hunter2!"\n    return 1';
+    const f = scanSecrets(code);
+    assert.deepStrictEqual(f.map((x) => [x.kind, x.line]), [['api_key', 2], ['password', 3]]);
+    const masked = maskSecrets(code, f);
+    assert.ok(masked.includes('"sk-proj-****"'), masked);
+    assert.ok(masked.includes('db_password = "****"'), masked);
+    assert.ok(!masked.includes('hunter2'));
+    assert.strictEqual(masked.split('\n').length, 4);
+  });
+  test('AWS · GitHub · Google · Slack · JWT · 주소 안 비밀번호 · 개인 키', () => {
+    const code = [
+      'a = "AKIAABCDEFGHIJKLMNOP"',
+      'b = "ghp_' + 'a'.repeat(36) + '"',
+      'c = "AIza' + 'b'.repeat(35) + '"',
+      'd = "xoxb-1234567890-abcdef"',
+      'e = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2Q"',
+      'url = "postgres://admin:S3cr3tPw@db:5432/app"',
+      '-----BEGIN RSA PRIVATE KEY-----\nMIIEow\nAAAA\n-----END RSA PRIVATE KEY-----',
+    ].join('\n');
+    const kinds = scanSecrets(code).map((x) => x.kind);
+    assert.deepStrictEqual(kinds, ['api_key', 'api_key', 'api_key', 'api_key', 'jwt', 'url_password', 'private_key']);
+    const masked = maskSecrets(code, scanSecrets(code));
+    assert.ok(masked.includes('postgres://admin:****@db'), masked);
+    assert.ok(masked.includes('-----BEGIN RSA PRIVATE KEY-----\n****\n-----END'), masked);
+    assert.ok(!masked.includes('MIIEow'));
+  });
+  test('예시·자리표시 값과 환경변수는 비밀값으로 안 봄', () => {
+    const code = [
+      'password = "****"', 'api_key = "<your-key>"', 'token = "${TOKEN}"', 'secret = os.environ["SECRET"]',
+      'password = ""', 'API_KEY = "changeme"', 'url = "postgres://user:<password>@host/db"', 'pwd = input()',
+    ].join('\n');
+    assert.deepStrictEqual(scanSecrets(code), []);
+  });
+  test('비밀값 없으면 코드 그대로', () => {
+    const code = 'def add(a, b):\n    return a + b';
+    assert.strictEqual(maskSecrets(code, scanSecrets(code)), code);
+  });
+});
+
+suite('원본 변경 감지 — compareSource', () => {
+  const saved = 'def add(a, b):\n    return a + b';
+  test('같은 자리에 그대로 (CRLF·끝 공백 무시)', () => {
+    assert.deepStrictEqual(compareSource(saved, 'def add(a, b):   \r\n    return a + b\r\n\r\nx = 1', 1, 2), { state: 'same' });
+  });
+  test('위에 코드가 추가돼서 내려감 → 위치 이동', () => {
+    assert.deepStrictEqual(compareSource(saved, 'import os\n\n\ndef add(a, b):\n    return a + b\n', 1, 2), { state: 'moved', start: 4, end: 5 });
+  });
+  test('내용이 바뀜', () => {
+    assert.deepStrictEqual(compareSource(saved, 'def add(a, b, c=0):\n    return a + b + c\n', 1, 2), { state: 'changed' });
+  });
+  test('같은 코드가 여러 곳이면 원래 자리에서 가까운 곳', () => {
+    const file = 'def add(a, b):\n    return a + b\n#\n#\n#\n#\ndef add(a, b):\n    return a + b';
+    assert.deepStrictEqual(compareSource(saved, file, 6, 7), { state: 'moved', start: 7, end: 8 });
   });
 });
