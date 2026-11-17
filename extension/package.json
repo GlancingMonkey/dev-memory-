@@ -58,6 +58,16 @@
       {
         "command": "codeMemory.runOnFunction",
         "title": "Code Memory: 함수에 실행 (내부용)"
+      },
+      {
+        "command": "codeMemory.runEvaluation",
+        "title": "Code Memory: 평가 실행 (팀용)",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "codeMemory.openKeySettings",
+        "title": "Code Memory: AI 키 설정",
+        "icon": "$(key)"
       }
     ],
     "menus": {
@@ -83,6 +93,11 @@
           "command": "codeMemory.switchMode",
           "when": "view == codeMemory.searchView",
           "group": "navigation@1"
+        },
+        {
+          "command": "codeMemory.openKeySettings",
+          "when": "view == codeMemory.searchView",
+          "group": "navigation@1.5"
         },
         {
           "command": "codeMemory.exportFeedback",

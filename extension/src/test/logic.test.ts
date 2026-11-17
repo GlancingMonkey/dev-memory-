@@ -1,7 +1,7 @@
 // logic.ts 단위 테스트 — VS Code 없이 돌아간다: npm run test:unit
 import * as assert from 'assert';
 import {
-  addUsage, adjustEndLine, compareSource, maskSecrets, scanSecrets, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
+  addUsage, adjustEndLine, canSendKey, guessProvider, maskKey, validateKey, evalToCsv, evalToMarkdown, EvalRow, parseEvalQuestions, rankOf, summarizeEval, compareSource, maskSecrets, scanSecrets, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
 } from '../logic';
 
 const linesOf = (src: string) => {
@@ -425,3 +425,87 @@ suite('원본 변경 감지 — compareSource', () => {
     assert.deepStrictEqual(compareSource(saved, file, 6, 7), { state: 'moved', start: 7, end: 8 });
   });
 });
+
+suite('성능 평가 — 질문 파일 · Hit@1/Hit@3 · 내보내기', () => {
+  test('질문 파일: {questions:[…]} 또는 배열, id 없으면 Q1…, expected 숫자 하나도 허용', () => {
+    const a = parseEvalQuestions(JSON.stringify({ questions: [{ q: ' 더하기 ', expected: [12] }, { id: 'X', q: 'JWT', expected: [] }, { q: '정렬', expected: 3 }] }));
+    assert.deepStrictEqual(a.map((x) => [x.id, x.q, x.expected]), [['Q1', '더하기', [12]], ['X', 'JWT', []], ['Q3', '정렬', [3]]]);
+    assert.throws(() => parseEvalQuestions('{"questions":[{"q":""}]}'), /q 가 비어/);
+    assert.throws(() => parseEvalQuestions('{"questions":[{"q":"a","expected":["x"]}]}'), /양의 정수/);
+    assert.throws(() => parseEvalQuestions('[]'));
+  });
+  test('순위: 정답 중 처음 나온 위치', () => {
+    assert.strictEqual(rankOf([12], [3, 12, 5]), 2);
+    assert.strictEqual(rankOf([5, 9], [9, 5]), 1);
+    assert.strictEqual(rankOf([7], [1, 2]), null);
+  });
+  const rows: EvalRow[] = [
+    { id: 'Q1', q: 'a', expected: [1], rank: 1, topIds: [1], searchMs: 100, ask: { status: 'answered', ms: 4000, totalTokens: 1000, citations: 1 } },
+    { id: 'Q2', q: 'b', expected: [2], rank: 3, topIds: [9, 8, 2], searchMs: 300, ask: { status: 'answered', ms: 6000, totalTokens: 1400, citations: 2 } },
+    { id: 'Q3', q: 'c', expected: [3], rank: null, topIds: [9], searchMs: 200 },
+    { id: 'Q4', q: 'd', expected: [], rank: null, topIds: [9], searchMs: 400, ask: { status: 'insufficient_context', ms: 1000, totalTokens: null, citations: 0 } },
+    { id: 'Q5', q: 'e', expected: [5], rank: null, topIds: [], searchMs: null, searchError: '연결 안 됨' },
+  ];
+  test('요약: Hit@1·Hit@3 은 정답 있고 검색 성공한 질문만, 근거 부족은 정답 없는 질문으로', () => {
+    const s = summarizeEval(rows);
+    assert.strictEqual(s.withAnswer, 3);
+    assert.strictEqual(s.hit1, 1);
+    assert.strictEqual(s.hit3, 2);
+    assert.strictEqual(s.missed, 1);
+    assert.strictEqual(s.meanRank, 2);
+    assert.deepStrictEqual(s.buckets, { first: 1, top3: 1, top10: 0, missed: 1 });
+    assert.strictEqual(s.searchFailed, 1);
+    assert.strictEqual(s.searchAvgMs, 250);
+    assert.strictEqual(s.searchP95Ms, 400);
+    assert.strictEqual(s.asked, 3);
+    assert.strictEqual(s.askAvgTokens, 1200);
+    assert.strictEqual(s.noAnswerCorrect, 1);
+    assert.strictEqual(s.noAnswerTotal, 1);
+  });
+  test('CSV · 마크다운', () => {
+    const csv = evalToCsv([{ id: 'Q1', q: 'a, "b"', expected: [1], rank: 1, topIds: [1, 2], searchMs: 10 }]);
+    assert.ok(csv.split('\n')[1].startsWith('Q1,"a, ""b""",1,1,1,1,10,1 2'), csv);
+    const md = evalToMarkdown(rows, summarizeEval(rows), '실제 서버');
+    assert.ok(md.includes('| 한 번에 찾음 (Hit@1) | 33% (1/3) |'), md);
+    assert.ok(md.includes('| 모르는 건 모른다고 함 | 1/1 |'));
+    assert.ok(md.includes('| Q3 | c | 3 | 못 찾음 |'));
+  });
+});
+
+suite('사용자 AI 키 — 회사 짐작 · 가리기 · 보내도 되는 주소', () => {
+  test('키 모양으로 회사 짐작', () => {
+    assert.strictEqual(guessProvider('sk-ant-api03-abcdefghijklmnop'), 'anthropic');
+    assert.strictEqual(guessProvider('AIzaSyA1234567890abcdefghijklmnopqrstu'), 'google');
+    assert.strictEqual(guessProvider('sk-proj-abcdefghijklmnop'), 'openai');
+    assert.strictEqual(guessProvider('hello'), null);
+  });
+  test('가리기: 앞부분 + 끝 4자리', () => {
+    assert.strictEqual(maskKey('sk-proj-abcdefghijklmnopa1b2'), 'sk-proj-…a1b2');
+    assert.strictEqual(maskKey('AIzaSyA1234567890abcdefghijklmnopqrstu'), 'AIza…rstu');
+    assert.strictEqual(maskKey('short'), '****');
+  });
+  test('localhost 나 https 일 때만 키를 보낸다', () => {
+    assert.strictEqual(canSendKey('http://localhost:8000'), true);
+    assert.strictEqual(canSendKey('http://127.0.0.1:8000'), true);
+    assert.strictEqual(canSendKey('https://api.example.com'), true);
+    assert.strictEqual(canSendKey('http://192.168.0.5:8000'), false);
+    assert.strictEqual(canSendKey('not a url'), false);
+  });
+  test('키 검사', () => {
+    assert.strictEqual(validateKey(''), '키를 붙여넣으세요');
+    assert.ok(validateKey('sk-abc def ghij klmnop qrst'));
+    assert.strictEqual(validateKey('sk-proj-abcdefghijklmnop'), null);
+  });
+  test('401·403 은 키 오류로', () => {
+    assert.strictEqual(parseAskErrKind(401), 'key');
+    assert.strictEqual(parseAskErrKind(403), 'key');
+  });
+});
+function parseAskErrKind(status: number): string {
+  try {
+    parseAskResponse(JSON.stringify({ detail: { code: 'llm_key_invalid', message: 'x' } }), status);
+  } catch (e) {
+    return (e as AskError).kind;
+  }
+  return '';
+}

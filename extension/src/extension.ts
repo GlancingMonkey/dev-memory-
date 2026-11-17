@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { COMPARE_SCHEME, compareDocs, SaveRecord, SearchViewProvider } from './sidebar';
+import { EvaluationRunner } from './evaluation';
 import {
   adjustEndLine, clamp, EmbeddingStatus, findFunctionNameByRegex, formatSeconds, maskSecrets, parseSaveResponse, pickSymbol, SaveUnconfirmedError,
   scanSecrets, SimpleSymbol,
@@ -337,7 +338,7 @@ class FunctionLens implements vscode.CodeLensProvider {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-  const searchProvider = new SearchViewProvider(context.workspaceState, context.globalState);
+  const searchProvider = new SearchViewProvider(context.workspaceState, context.globalState, context.secrets);
 
   const command = vscode.commands.registerCommand('codeMemory.saveSnippet', async () => {
     if (saving) {
@@ -481,14 +482,23 @@ export function activate(context: vscode.ExtensionContext) {
   // 오늘 AI 질문 수(✦ N)를 상태 표시줄 글자 뒤에, 토큰 합계를 툴팁에 붙인다 (실제 서버 모드만)
   let baseText = '';
   let baseTooltip = '';
+  let keyLabel = '';   // 내 AI 키를 쓰는 중이면 회사 이름
   const render = () => {
     const mock = vscode.workspace.getConfiguration('codeMemory').get<boolean>('mock', true);
     const u = searchProvider.usageToday();
     const showUsage = !mock && u.count > 0;
-    status.text = baseText + (showUsage ? ` · ✦ ${u.count}` : '');
+    status.text = baseText + (showUsage ? ` · ✦ ${u.count}` : '') + (!mock && keyLabel ? ' · $(key)' : '');
     status.tooltip = baseTooltip + (mock ? '' : `\n\n오늘 AI 질문 ${u.count}번 · ${u.tokens.toLocaleString()} 토큰`
-      + '\n(저장된 답변 다시 보기는 0으로 셈 · 내 PC 기준, 자정에 초기화)');
+      + '\n(저장된 답변 다시 보기는 0으로 셈 · 내 PC 기준, 자정에 초기화)'
+      + `\nAI 키: ${keyLabel ? `내 키 (${keyLabel})` : '서버 기본 키'}`);
   };
+  const refreshKey = async () => {
+    const s = await searchProvider.keyState();
+    keyLabel = s.hasKey && s.useOwn ? s.providerLabel ?? '' : '';
+    render();
+  };
+  void refreshKey();
+  context.subscriptions.push(searchProvider.onDidChangeKey(() => void refreshKey()), context.secrets.onDidChange(() => void refreshKey()));
   const setStatus = (text: string, tooltip: string, bg?: vscode.ThemeColor) => {
     baseText = text;
     baseTooltip = tooltip;
@@ -559,7 +569,7 @@ export function activate(context: vscode.ExtensionContext) {
         ? vscode.ConfigurationTarget.Workspace
         : vscode.ConfigurationTarget.Global;
 
-    type Id = 'mock' | 'real' | 'url' | 'health' | 'settings' | 'search' | 'save' | 'ask' | 'feedback' | 'walkthrough' | 'sep';
+    type Id = 'mock' | 'real' | 'url' | 'health' | 'settings' | 'search' | 'save' | 'ask' | 'feedback' | 'key' | 'walkthrough' | 'sep';
     type Item = vscode.QuickPickItem & { id: Id };
     const sep = (label: string): Item => ({ id: 'sep', label, kind: vscode.QuickPickItemKind.Separator });
     const fb = searchProvider.feedbackCounts();
@@ -572,6 +582,7 @@ export function activate(context: vscode.ExtensionContext) {
       { id: 'save', label: '$(save) 코드 저장', description: 'Ctrl+Alt+S · 선택 또는 커서가 있는 함수' },
       { id: 'ask', label: '$(sparkle) 이 코드에 대해 묻기', description: 'Ctrl+Alt+A · 선택 또는 커서가 있는 함수' },
       { id: 'feedback', label: '$(export) AI 피드백 내보내기', description: `👍 ${fb.up} · 👎 ${fb.down}` },
+      { id: 'key', label: '$(key) AI 키 설정', description: keyLabel ? `내 키 (${keyLabel})` : '서버 기본 키' },
       { id: 'walkthrough', label: '$(question) 시작하기 안내' },
       sep('설정'),
       { id: 'url', label: '$(edit) 서버 주소 바꾸기…' },
@@ -619,6 +630,9 @@ export function activate(context: vscode.ExtensionContext) {
       case 'feedback':
         await searchProvider.exportFeedback();
         break;
+      case 'key':
+        await searchProvider.openKeySettings();
+        break;
       case 'walkthrough':
         await vscode.commands.executeCommand('codeMemory.openWalkthrough');
         break;
@@ -663,7 +677,11 @@ export function activate(context: vscode.ExtensionContext) {
     await searchProvider.prefillAsk(`${lead}${tail} ?`, lead.length, lead.length + tail.length);
   });
   const exportFeedback = vscode.commands.registerCommand('codeMemory.exportFeedback', () => searchProvider.exportFeedback());
-  context.subscriptions.push(askAboutSelection, exportFeedback);
+  // 성능 평가 (팀용) — 명령 팔레트로만 연다
+  const evaluation = new EvaluationRunner(searchProvider);
+  context.subscriptions.push(vscode.commands.registerCommand('codeMemory.runEvaluation', () => evaluation.start()));
+  context.subscriptions.push(askAboutSelection, exportFeedback,
+    vscode.commands.registerCommand('codeMemory.openKeySettings', () => searchProvider.openKeySettings()));
 
   // 함수 위 글자(CodeLens) → 그 함수를 선택하고 원래 명령 실행
   const lens = new FunctionLens();

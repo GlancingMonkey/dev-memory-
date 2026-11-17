@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import {
   addUsage, answerToMarkdown, askCacheKey, AskError, askErrorFor, AskResponse, AskSource, AskTurn, buildAskRequest, buildSearchUrl,
-  checkAppliedFilter, clamp, compareSource, pickSymbol, SimpleSymbol, SourceState, EmbeddingStatus, endsWithQuestionMark, errorDetailText, FILTER_MAX_LENGTH, FilterCheck, filterLocally,
+  canSendKey, checkAppliedFilter, clamp, compareSource, guessProvider, LLM_KEY_HEADER, LLM_PROVIDER_HEADER, LLM_PROVIDERS,
+  LlmProvider, maskKey, validateKey, pickSymbol, SimpleSymbol, SourceState, EmbeddingStatus, endsWithQuestionMark, errorDetailText, FILTER_MAX_LENGTH, FilterCheck, filterLocally,
   FilterOptions, hasFilter, isVagueQuestion, localDateKey, looksLikeQuestion, normalizeFilter, parseAskResponse, parseFilterOptions,
   parseSse, reindent, SearchFilter, todayUsage, UsageDay,
 } from './logic';
@@ -96,7 +97,7 @@ function mockResults(): SearchResult[] {
 // 검색 오류 — 사이드바에 "제목 + 설명"으로 나눠 보여주기 위해
 //   kind: timeout(기다리면 될 수 있음) / connect(서버·주소 문제) / server(서버 오류) / format(응답 모양 문제)
 type SearchErrorKind = 'timeout' | 'connect' | 'server' | 'format';
-class SearchError extends Error {
+export class SearchError extends Error {
   constructor(
     public readonly title: string,
     public readonly detail: string,
@@ -107,12 +108,12 @@ class SearchError extends Error {
 }
 
 // 검색 결과 + 서버가 필터를 진짜 적용했는지 (applied / none / ignored)
-interface SearchOutcome {
+export interface SearchOutcome {
   results: SearchResult[];
   check: FilterCheck;
 }
 
-async function searchSnippets(query: string, filter: SearchFilter): Promise<SearchOutcome> {
+export async function searchSnippets(query: string, filter: SearchFilter): Promise<SearchOutcome> {
   const config = vscode.workspace.getConfiguration('codeMemory');
 
   if (config.get<boolean>('mock', true)) {
@@ -202,11 +203,12 @@ async function loadFilterOptions(): Promise<FilterOptions> {
 //   stream: true 로 보내고, 서버가 text/event-stream 으로 주면 한 글자씩, 일반 JSON 으로 주면 한 번에 (예전 서버 그대로 동작)
 //   mock 이면 서버 없이 샘플 답변. 질문에 #근거부족 / #오류 를 넣으면 그 화면을 시험할 수 있다.
 // ─────────────────────────────────────────────
-interface AskOptions {
+export interface AskOptions {
   history: AskTurn[];
   signal: AbortSignal;                                 // 사용자가 "취소"를 누르면 abort
   onSources: (sources: AskSource[]) => void;           // 참고 코드를 먼저 받았을 때
   onDelta: (text: string) => void;                     // 답변 조각
+  key?: { provider: LlmProvider; value: string };      // 사용자 AI 키 — 있으면 헤더로 (없으면 서버 기본 키)
 }
 
 const cancelledError = () => new AskError('cancelled', '취소했어요', '기다리기를 그만뒀어요. 서버에서는 답변이 계속 만들어졌을 수 있어요.');
@@ -250,7 +252,7 @@ async function askMock(q: string, opts: AskOptions): Promise<AskResponse> {
   }));
 }
 
-async function askBackend(q: string, opts: AskOptions): Promise<AskResponse> {
+export async function askBackend(q: string, opts: AskOptions): Promise<AskResponse> {
   const config = vscode.workspace.getConfiguration('codeMemory');
   const limit = clamp(config.get<number>('searchLimit'), 1, 20, 10);
 
@@ -270,7 +272,11 @@ async function askBackend(q: string, opts: AskOptions): Promise<AskResponse> {
   try {
     const res = await fetch(`${baseUrl}/ask`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream, application/json',
+        ...(opts.key ? { [LLM_KEY_HEADER]: opts.key.value, [LLM_PROVIDER_HEADER]: opts.key.provider } : {}),
+      },
       body: JSON.stringify(buildAskRequest(q, limit, opts.history, true)),
       signal: ctrl.signal,
     });
@@ -444,10 +450,14 @@ type FromWebview =
   | { type: 'compareSource'; result: SearchResult }
   | { type: 'resave'; result: SearchResult }
   | { type: 'walkthrough' }
-  | { type: 'ask'; q: string; reqId: number; history?: AskTurn[]; fresh?: boolean }
+  | { type: 'ask'; q: string; reqId: number; history?: AskTurn[]; fresh?: boolean; useServerKey?: boolean }
   | { type: 'askCancel'; reqId: number }
   | { type: 'feedback'; fb: FeedbackRecord }
-  | { type: 'exportFeedback' };
+  | { type: 'exportFeedback' }
+  | { type: 'openKeyPanel' }
+  | { type: 'saveKey'; provider: LlmProvider; key: string }
+  | { type: 'clearKey' }
+  | { type: 'setUseOwn'; useOwn: boolean };
 
 // AI 답변 피드백 한 건 — 아직 서버 API 가 없어서 이 PC 에만 저장. "AI 피드백 내보내기"로 JSON 공유
 interface FeedbackRecord {
@@ -475,6 +485,31 @@ interface CachedAnswer {
   result: AskResponse;
 }
 const ANSWER_CACHE_KEY = 'codeMemory.answerCache';
+
+// 사용자 AI 키 — 키 값은 비밀 저장소(SecretStorage)에만. 무엇을 쓸지·마지막 결과는 globalState (키 값 없음)
+const SECRET_KEY = 'codeMemory.llmKey';
+const KEY_PREFS_KEY = 'codeMemory.llmKeyPrefs';
+interface StoredKey {
+  provider: LlmProvider;
+  key: string;
+  savedAt: string;
+}
+interface KeyPrefs {
+  useOwn: boolean;
+  last?: { ok: boolean; time: string; msg?: string };
+}
+export interface KeyState {
+  hasKey: boolean;
+  provider: LlmProvider | null;
+  providerLabel: string | null;
+  masked: string | null;
+  savedAt: string | null;
+  useOwn: boolean;
+  last: KeyPrefs['last'] | null;
+  mock: boolean;
+  canSend: boolean;
+  apiUrl: string;
+}
 const ANSWER_CACHE_MAX = 10;
 const USAGE_KEY = 'codeMemory.aiUsage';
 
@@ -623,7 +658,60 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
 
   // state: 마지막 검색·최근 검색어·저장 기록·화면 설정·저장된 답변을 워크스페이스별로 저장 (다시 열어도 남는다)
   // global: 이 PC 전체 — 오늘 AI 사용량, AI 피드백
-  constructor(private readonly state: vscode.Memento, private readonly global: vscode.Memento) {}
+  constructor(
+    private readonly state: vscode.Memento,
+    private readonly global: vscode.Memento,
+    private readonly secrets: vscode.SecretStorage,
+  ) {}
+
+  // ── 사용자 AI 키
+  private readonly keyEmitter = new vscode.EventEmitter<void>();
+  public readonly onDidChangeKey = this.keyEmitter.event;
+  private async readKey(): Promise<StoredKey | undefined> {
+    try {
+      const raw = await this.secrets.get(SECRET_KEY);
+      return raw ? JSON.parse(raw) as StoredKey : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  private keyPrefs(): KeyPrefs {
+    return this.global.get<KeyPrefs>(KEY_PREFS_KEY, { useOwn: true });
+  }
+  public async keyState(): Promise<KeyState> {
+    const k = await this.readKey();
+    const prefs = this.keyPrefs();
+    const config = vscode.workspace.getConfiguration('codeMemory');
+    const apiUrl = config.get<string>('apiUrl', 'http://localhost:8000');
+    return {
+      hasKey: !!k,
+      provider: k?.provider ?? null,
+      providerLabel: k ? LLM_PROVIDERS.find((p) => p.id === k.provider)?.label ?? k.provider : null,
+      masked: k ? maskKey(k.key) : null,
+      savedAt: k?.savedAt ?? null,
+      useOwn: prefs.useOwn,
+      last: prefs.last ?? null,
+      mock: config.get<boolean>('mock', true),
+      canSend: canSendKey(apiUrl),
+      apiUrl,
+    };
+  }
+  private async setKeyPrefs(p: Partial<KeyPrefs>): Promise<void> {
+    await this.global.update(KEY_PREFS_KEY, { ...this.keyPrefs(), ...p });
+    this.keyEmitter.fire();
+  }
+  private async postKeyState(show = false): Promise<void> {
+    if (this.view && this.ready) {
+      this.view.webview.postMessage({ type: 'keyState', state: await this.keyState(), show });
+    }
+  }
+  // 제목줄 🔑 / 상태 표시줄 메뉴 → 패널을 열고 키 화면
+  public async openKeySettings(): Promise<void> {
+    this.pendingKeyPanel = true;
+    await vscode.commands.executeCommand(`${SearchViewProvider.viewId}.focus`);
+    this.flush();
+  }
+  private pendingKeyPanel = false;
 
   // ── 오늘 AI 사용량 (실제 서버 질문만. mock·저장된 답변은 안 셈)
   public usageToday(): UsageDay {
@@ -802,6 +890,10 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
       this.view.webview.postMessage({ type: 'focus' });
       this.pendingFocus = false;
     }
+    if (this.pendingKeyPanel) {
+      this.pendingKeyPanel = false;
+      void this.postKeyState(true);
+    }
     if (this.pendingPrefill) {
       this.view.webview.postMessage({ type: 'prefill', ...this.pendingPrefill });
       this.pendingPrefill = undefined;
@@ -828,6 +920,7 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
     const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('codeMemory')) {
         postConfig();
+        void this.postKeyState(false);   // mock·주소가 바뀌면 키 화면 안내도 바뀐다
       }
     });
     view.onDidDispose(() => {
@@ -907,8 +1000,18 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
           const ctrl = new AbortController();
           this.askCtrls.set(msg.reqId, ctrl);
           const started = Date.now();
+          // 사용자 AI 키: 켜져 있고, mock 이 아니고, 보내도 되는 주소일 때만 싣는다
+          const stored = mock || msg.useServerKey || !this.keyPrefs().useOwn ? undefined : await this.readKey();
+          const apiUrl = vscode.workspace.getConfiguration('codeMemory').get<string>('apiUrl', 'http://localhost:8000');
+          const keyBlocked = !!stored && !canSendKey(apiUrl);
+          const key = stored && !keyBlocked ? { provider: stored.provider, value: stored.key } : undefined;
+          const keyInfo = {
+            keyUsed: key ? LLM_PROVIDERS.find((p) => p.id === key.provider)?.label ?? key.provider : null,
+            keyBlocked,
+          };
           try {
             const result = await askBackend(msg.q, {
+              key,
               history,
               signal: ctrl.signal,
               onSources: (list) => view.webview.postMessage({
@@ -923,15 +1026,21 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
               view.webview.postMessage({ type: 'recent', items: this.recentView(this.readRecent()) });
             }
             const sources = await withLocalStatus(result.sources);
+            if (key) {
+              await this.setKeyPrefs({ last: { ok: true, time: new Date().toISOString() } });
+            }
             view.webview.postMessage({
               type: 'answer', reqId: msg.reqId, q: msg.q, elapsedMs: Date.now() - started, historySent: history.length,
-              today: usage, result: { ...result, sources },
+              today: usage, result: { ...result, sources }, ...keyInfo,
             });
           } catch (err) {
             const e = err instanceof AskError ? err
               : new AskError('server', 'AI 질문 실패', err instanceof Error ? err.message : String(err));
+            if (key && e.kind === 'key') {
+              await this.setKeyPrefs({ last: { ok: false, time: new Date().toISOString(), msg: e.detail.slice(0, 120) } });
+            }
             view.webview.postMessage({
-              type: 'askError', reqId: msg.reqId, q: msg.q, title: e.title, detail: e.detail, kind: e.kind,
+              type: 'askError', reqId: msg.reqId, q: msg.q, title: e.title, detail: e.detail, kind: e.kind, ...keyInfo,
             });
           } finally {
             this.askCtrls.delete(msg.reqId);
@@ -948,6 +1057,36 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
         }
         case 'exportFeedback': {
           await this.exportFeedback();
+          break;
+        }
+        case 'openKeyPanel': {
+          await this.postKeyState(true);
+          break;
+        }
+        case 'saveKey': {
+          const problem = validateKey(msg.key);
+          if (problem) {
+            view.webview.postMessage({ type: 'keyError', msg: problem });
+            break;
+          }
+          const provider = LLM_PROVIDERS.some((p) => p.id === msg.provider) ? msg.provider : guessProvider(msg.key) ?? 'openai';
+          await this.secrets.store(SECRET_KEY, JSON.stringify({ provider, key: msg.key.trim(), savedAt: new Date().toISOString() } satisfies StoredKey));
+          await this.setKeyPrefs({ useOwn: true, last: undefined });
+          await this.postKeyState(true);
+          break;
+        }
+        case 'clearKey': {
+          const ok = await vscode.window.showWarningMessage('저장한 AI 키를 지울까요?', { modal: true, detail: '지우면 서버 기본 키로 AI 답변을 받아요.' }, '지우기');
+          if (ok) {
+            await this.secrets.delete(SECRET_KEY);
+            await this.setKeyPrefs({ last: undefined });
+          }
+          await this.postKeyState(true);
+          break;
+        }
+        case 'setUseOwn': {
+          await this.setKeyPrefs({ useOwn: !!msg.useOwn });
+          await this.postKeyState(true);
           break;
         }
         case 'open': {
@@ -1326,6 +1465,30 @@ function getHtml(webview: vscode.Webview): string {
            background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 10%, transparent); }
   .vague .vsub { color: var(--vscode-descriptionForeground); }
 
+  /* AI 키 화면 — 켜져 있으면 검색 화면은 숨긴다 */
+  body.keymode #header, body.keymode .content, body.keymode .section, body.keymode #banner, body.keymode #toast { display: none !important; }
+  .keyp { padding: 8px 12px 16px; font-size: 12.5px; }
+  .kback { font-size: 12px; margin-bottom: 8px; }
+  .ktitle { font-size: 13px; font-weight: 600; margin: 4px 0 8px; }
+  .kbox { padding: 9px 10px; border-radius: 6px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, #8884)); }
+  .kstate { display: flex; align-items: center; gap: 7px; }
+  .kdot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--vscode-descriptionForeground); }
+  .kdot.ok { background: var(--vscode-testing-iconPassed, #73c991); }
+  .kdot.err { background: var(--vscode-errorForeground); }
+  .kmeta { margin-top: 4px; font-size: 11.5px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+  .kmeta.err { color: var(--vscode-errorForeground); }
+  .kbtns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .sbtn.danger { color: var(--vscode-errorForeground); }
+  .ksec { margin: 14px 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; color: var(--vscode-descriptionForeground); }
+  .ksel, .kin { box-sizing: border-box; width: 100%; margin-bottom: 6px; padding: 4px 7px; font: inherit; font-size: 12px; border-radius: 3px;
+                color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); }
+  .kin { font-family: var(--vscode-editor-font-family); }
+  .ksel:focus, .kin:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+  .kerr { margin-top: 6px; font-size: 12px; color: var(--vscode-errorForeground); }
+  .kradio { display: flex; align-items: flex-start; gap: 6px; margin: 4px 0; cursor: pointer; }
+  .kradio small { display: block; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .keyp .anote { margin-top: 12px; }
+
   /* 처음 화면 단축키 안내 */
   .tipcard { margin: 12px 0 8px; padding: 7px 9px; border-radius: 6px; font-size: 12px;
              border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, #8884)); }
@@ -1421,6 +1584,8 @@ function getHtml(webview: vscode.Webview): string {
 </head>
 <body>
   <div id="banner" class="banner" hidden><b>MOCK</b><span>서버를 부르지 않아요. 샘플 결과만 나옵니다.</span></div>
+
+  <section id="keyPanel" class="keyp" hidden></section>
 
   <div id="header" class="header">
     <form id="form" class="search">
@@ -1830,6 +1995,13 @@ function getHtml(webview: vscode.Webview): string {
         setSearching(false);
         showError(msg.title, msg.detail, msg.kind);
         break;
+      case 'keyState':
+        keyState = msg.state;
+        if (msg.show) { showKeyPanel(true); } else if (!keyPanel.hidden) { renderKeyPanel(); }
+        break;
+      case 'keyError':
+        if (!keyPanel.hidden) { keyEditing = true; renderKeyPanel(msg.msg); }
+        break;
       case 'filterOptions':
         filterOpts = msg.options || null;
         filterErr = msg.error || '';
@@ -1865,6 +2037,141 @@ function getHtml(webview: vscode.Webview): string {
         break;
     }
   });
+
+  // ── 사용자 AI 키 화면 (제목줄 🔑) — 키 값은 확장 본체의 비밀 저장소에만. 여기엔 가린 글자만 온다
+  const keyPanel = byId('keyPanel');
+  const KEY_PROVIDERS = [
+    { id: 'openai', label: 'OpenAI', hint: 'sk-…' },
+    { id: 'anthropic', label: 'Anthropic (Claude)', hint: 'sk-ant-…' },
+    { id: 'google', label: 'Google (Gemini)', hint: 'AIza…' },
+  ];
+  let keyState = null;
+  let keyEditing = false;
+
+  function showKeyPanel(on) {
+    document.body.classList.toggle('keymode', on);
+    keyPanel.hidden = !on;
+    if (on) { renderKeyPanel(); window.scrollTo(0, 0); }
+  }
+  function renderKeyPanel(errMsg) {
+    const s = keyState;
+    if (!s) { return; }
+    const back = el('button', 'link-btn kback', '← 검색으로');
+    back.type = 'button';
+    back.addEventListener('click', function () { keyEditing = false; showKeyPanel(false); input.focus(); });
+    const parts = [back, el('div', 'ktitle', 'AI 키')];
+
+    // 지금 상태
+    const box = el('div', 'kbox');
+    const st = el('div', 'kstate');
+    const using = s.hasKey && s.useOwn;
+    st.append(el('span', 'kdot ' + (using ? (s.last && !s.last.ok ? 'err' : 'ok') : 'off')),
+      el('b', '', using ? '내 키 사용 중' : s.hasKey ? '내 키 저장됨 (지금은 서버 기본 키 사용)' : '내 키 없음'));
+    box.append(st);
+    if (s.hasKey) {
+      box.append(el('div', 'kmeta', s.providerLabel + ' · ' + s.masked));
+      let line = '저장 ' + new Date(s.savedAt).toLocaleString();
+      if (s.last) { line += ' · 마지막 사용 ' + (s.last.ok ? '정상' : '키 오류'); }
+      const meta = el('div', 'kmeta', line);
+      if (s.last && !s.last.ok) { meta.classList.add('err'); meta.title = s.last.msg || ''; }
+      box.append(meta);
+      const btns = el('div', 'kbtns');
+      btns.append(sbtn('바꾸기', false, function () { keyEditing = true; renderKeyPanel(); }),
+        sbtn('지우기', false, function () { vscode.postMessage({ type: 'clearKey' }); }));
+      btns.lastChild.classList.add('danger');
+      box.append(btns);
+    } else {
+      box.append(el('div', 'kmeta', '지금은 서버에 설정된 기본 키로 AI 답변을 받아요.'));
+    }
+    parts.push(box);
+
+    // 입력 칸 (키가 없거나 "바꾸기")
+    if (!s.hasKey || keyEditing) {
+      parts.push(el('div', 'ksec', s.hasKey ? '새 키로 바꾸기' : '내 AI 키 넣기'));
+      const sel = el('select', 'ksel');
+      KEY_PROVIDERS.forEach(function (p) { const o = el('option', '', p.label); o.value = p.id; sel.append(o); });
+      sel.value = s.provider || 'openai';
+      const kin = el('input', 'kin');
+      kin.type = 'password';
+      kin.autocomplete = 'off';
+      kin.spellcheck = false;
+      kin.placeholder = hintOf(sel.value);
+      const kinfo = el('div', 'kmeta');
+      let confirmMismatch = '';   // 키 모양과 다른 회사를 고른 채 저장 → 한 번 묻고, 다시 누르면 저장
+      sel.addEventListener('change', function () { kin.placeholder = hintOf(sel.value); confirmMismatch = ''; kinfo.textContent = ''; kinfo.classList.remove('err'); });
+      // 키를 붙여넣거나 고칠 때마다 모양으로 회사를 다시 고른다 (그 뒤에 직접 바꾸는 건 된다)
+      kin.addEventListener('input', function () {
+        confirmMismatch = '';
+        kinfo.classList.remove('err');
+        const g = guessKeyProvider(kin.value);
+        if (g && g !== sel.value) {
+          sel.value = g;
+          kin.placeholder = hintOf(g);
+          kinfo.textContent = '키 모양을 보고 ' + labelOf(g) + ' 로 골랐어요. 아니면 위에서 바꾸세요.';
+        } else if (!g) {
+          kinfo.textContent = '';
+        }
+      });
+      const save = sbtn('저장', true, function () {
+        const g = guessKeyProvider(kin.value);
+        if (g && g !== sel.value && confirmMismatch !== kin.value + '|' + sel.value) {
+          confirmMismatch = kin.value + '|' + sel.value;
+          kinfo.textContent = '이 키는 ' + labelOf(g) + ' 키 모양인데 ' + labelOf(sel.value) + ' 를 골랐어요. 맞으면 저장을 한 번 더 누르세요.';
+          kinfo.classList.add('err');
+          return;
+        }
+        vscode.postMessage({ type: 'saveKey', provider: sel.value, key: kin.value });
+        kin.value = '';
+        keyEditing = false;
+      });
+      kin.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); save.click(); } });
+      const row = el('div', 'kbtns');
+      row.append(save);
+      if (keyEditing) { row.append(sbtn('취소', false, function () { keyEditing = false; renderKeyPanel(); })); }
+      parts.push(sel, kin, kinfo, row);
+      if (errMsg) { parts.push(el('div', 'kerr', errMsg)); }
+      parts.push(el('div', 'kmeta', '키는 이 PC 의 VS Code 비밀 저장소에만 저장돼요. 설정 파일·Git·이 화면에는 남지 않고, AI 질문을 보낼 때만 서버로 전달돼요.'));
+    }
+
+    // 무엇을 쓸지
+    if (s.hasKey) {
+      parts.push(el('div', 'ksec', 'AI 답변에 쓸 키'));
+      [[true, '내 키', '요금은 내 ' + s.providerLabel + ' 계정으로'], [false, '서버 기본 키', '팀 서버의 키 (내 키는 저장만 해둠)']].forEach(function (o) {
+        const lab = el('label', 'kradio');
+        const r = el('input');
+        r.type = 'radio';
+        r.name = 'useOwn';
+        r.checked = s.useOwn === o[0];
+        r.addEventListener('change', function () { vscode.postMessage({ type: 'setUseOwn', useOwn: o[0] }); });
+        const tx = el('span', '', o[1]);
+        tx.append(el('small', '', o[2]));
+        lab.append(r, tx);
+        parts.push(lab);
+      });
+    }
+
+    // 주의
+    if (s.mock) {
+      parts.push(el('div', 'anote', 'mock 모드에서는 서버를 부르지 않아서 키를 쓰지 않아요. 실제 서버 모드에서 써요.'));
+    } else if (s.hasKey && !s.canSend) {
+      parts.push(el('div', 'anote', '서버 주소(' + s.apiUrl + ')가 내 PC 도 아니고 https 도 아니라서 키를 보내지 않아요. 키가 암호화 없이 전달될 수 있어요.'));
+    }
+    keyPanel.replaceChildren.apply(keyPanel, parts);
+    const first = keyPanel.querySelector('.kin');
+    if (first) { first.focus(); }
+  }
+  function guessKeyProvider(v) {
+    const k = String(v || '').trim();
+    return /^sk-ant-/.test(k) ? 'anthropic' : /^AIza/.test(k) ? 'google' : /^sk-/.test(k) ? 'openai' : '';
+  }
+  function labelOf(id) {
+    const p = KEY_PROVIDERS.find(function (x) { return x.id === id; });
+    return p ? p.label : id;
+  }
+  function hintOf(id) {
+    const p = KEY_PROVIDERS.find(function (x) { return x.id === id; });
+    return (p ? p.hint : '') + '  (붙여넣기)';
+  }
 
   function setResults(query, results, restored, usedFilter, check) {
     current = {
@@ -2597,7 +2904,7 @@ function getHtml(webview: vscode.Webview): string {
     setAsking(true);
     intro.hidden = true;
     renderAnswerLoading(q);
-    vscode.postMessage({ type: 'ask', q: q, reqId: askSeq, history: base.slice(-HISTORY_SEND), fresh: !!opts.regen });
+    vscode.postMessage({ type: 'ask', q: q, reqId: askSeq, history: base.slice(-HISTORY_SEND), fresh: !!opts.regen || !!opts.serverKey, useServerKey: !!opts.serverKey });
   }
 
   // 취소 — 확장 본체에 끊으라고 알리고, 늦게 오는 응답은 번호가 달라서 버려진다
@@ -2911,6 +3218,8 @@ function getHtml(webview: vscode.Webview): string {
       }
       foot.push((msg.elapsedMs / 1000).toFixed(1) + '초');
     }
+    if (msg.keyUsed) { foot.push('내 키 (' + msg.keyUsed + ')'); }
+    if (msg.keyBlocked) { foot.push('주소가 https 가 아니라 내 키를 안 보냄 (서버 기본 키)'); }
     if (msg.historySent > 0) { foot.push('앞 대화 ' + msg.historySent + '개를 같이 보냄'); }
     if (msg.today) { foot.push('오늘 ' + msg.today.count + '번 · ' + msg.today.tokens.toLocaleString() + ' 토큰'); }
     foot.push(scopeText());
@@ -3058,7 +3367,10 @@ function getHtml(webview: vscode.Webview): string {
     const text = el('div');
     text.append(el('strong', '', msg.title), el('div', '', msg.detail || ''));
     const btns = el('div', 'btns');
-    if (msg.kind === 'input') {
+    if (msg.kind === 'key') {
+      btns.append(sbtn('AI 키 설정 열기', true, function () { vscode.postMessage({ type: 'openKeyPanel' }); }));
+      btns.append(sbtn('서버 기본 키로 다시 묻기', false, function () { ask(msg.q, { regen: true, serverKey: true }); }));
+    } else if (msg.kind === 'input') {
       btns.append(sbtn('질문 고치기', true, function () { input.value = msg.q; updateMode(); input.focus(); input.select(); }));
     } else {
       // 자동 재전송은 하지 않는다. 사람이 누를 때만 같은 질문을 다시 보낸다.
@@ -3069,7 +3381,9 @@ function getHtml(webview: vscode.Webview): string {
     }
     text.append(btns);
     box.append(icon(warn ? 'clock' : 'alert'), text);
-    answerBox.replaceChildren(answerHead(warn ? '시간 초과' : '오류', warn ? 'warn' : 'err', msg.q, {}), el('div', 'aq', '질문: ' + msg.q), box);
+    answerBox.replaceChildren(answerHead(msg.kind === 'key' ? '키 확인 필요' : warn ? '시간 초과' : '오류', warn ? 'warn' : 'err', msg.q, {}),
+      el('div', 'aq', '질문: ' + msg.q), box);
+    if (msg.keyUsed) { answerBox.append(el('div', 'afoot', '내 AI 키 (' + msg.keyUsed + ')로 보냄 · 자동으로 다시 보내지 않아요')); }
   }
 
   function sbtn(label, primary, onClick) {
