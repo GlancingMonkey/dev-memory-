@@ -1,0 +1,369 @@
+{
+  "date_kst": "2026-11-18",
+  "runtime_commit": "c534e1d236451a6f48232ddc1664c74bbf93f4e7",
+  "early_openai_http_commit": "29802216de3a1c8d0bf02c7ee6d807793e4ba4e7",
+  "proof_scope": {
+    "api": "Actual local HTTP/E5/PostgreSQL/OpenAI responses, no mocked provider in these four cases",
+    "windows": "User screenshots and user-reported actions; not agent-controlled Windows or independent usability study",
+    "claude": "User relayed Extension owner confirmed success; no raw response/model/usage provided"
+  },
+  "final_save": {
+    "saved_id": 18,
+    "request": {
+      "project_name": "mvp-auto-test-1104",
+      "file_path": "is_positive.py",
+      "language": "python",
+      "function_name": "is_positive",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def is_positive(value):\r\n    return value > 0"
+    },
+    "stored_fields_match": true,
+    "embedding_status": "ready",
+    "embedding_error": null,
+    "dimension": 768,
+    "norm": 1.0000000610651365,
+    "rows_before": 17,
+    "rows_after": 18,
+    "existing_17_rows_unchanged": true,
+    "existing_rows_sha256": "9c5fa356a3517e986f1946fb168755010e9a5968663d1fe945b83ba016fd6d64",
+    "confirmation": "Extension HTTP 200/ready log supplied by user; DB read directly"
+  },
+  "retrieval": {
+    "question": "숫자가 0보다 큰 양수인지 확인하는 함수",
+    "all_projects_target_rank": 2,
+    "filtered_target_rank": 1,
+    "filtered_result_ids": [
+      18,
+      6,
+      8
+    ],
+    "ui_matches_api": {
+      "source": "user screenshot",
+      "project": "mvp-auto-test-1104",
+      "range_applied_shown": true,
+      "result_count": 3,
+      "ordered_ids": [
+        18,
+        6,
+        8
+      ],
+      "target_rank": 1,
+      "target_original_matches_shown": true
+    },
+    "filter_options": {
+      "projects": [
+        {
+          "name": "backend-api-regression",
+          "count": 1
+        },
+        {
+          "name": "capstone-rag",
+          "count": 9
+        },
+        {
+          "name": "mvp-auto-test-1104",
+          "count": 3
+        },
+        {
+          "name": "mvp-save-test",
+          "count": 4
+        }
+      ],
+      "languages": [
+        {
+          "name": "python",
+          "count": 11
+        },
+        {
+          "name": "typescript",
+          "count": 6
+        }
+      ]
+    },
+    "topk_before_filter_proof": {
+      "unfiltered_limit1": {
+        "results": [
+          {
+            "id": 17,
+            "project_name": "capstone-rag",
+            "file_path": "extension/src/logic.ts",
+            "language": "typescript",
+            "function_name": "buildAskRequest",
+            "start_line": 379,
+            "end_line": 393,
+            "code": "export const HISTORY_SEND_MAX = 2;          // 서버로 보내는 이전 대화 수\nconst HISTORY_ANSWER_MAX = 1500;            // 이전 답변은 앞부분만 (요청이 너무 커지지 않게)\n\n// POST /ask 요청 본문. history 는 있을 때만, stream 은 true 일 때만 넣는다 (예전 서버와 그대로 호환)\nexport function buildAskRequest(q: string, limit: number, history: AskTurn[] = [], stream = false): Record<string, unknown> {\n  const body: Record<string, unknown> = { q, limit };\n  const recent = history.slice(-HISTORY_SEND_MAX).map((h) => ({ q: h.q, answer: h.answer.slice(0, HISTORY_ANSWER_MAX) }));\n  if (recent.length) {\n    body.history = recent;\n  }\n  if (stream) {\n    body.stream = true;\n  }\n  return body;\n}",
+            "score": 0.8287391662597656
+          }
+        ],
+        "filters": {
+          "project": null,
+          "language": null
+        }
+      },
+      "filtered_limit1": {
+        "results": [
+          {
+            "id": 18,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "is_positive.py",
+            "language": "python",
+            "function_name": "is_positive",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def is_positive(value):\r\n    return value > 0",
+            "score": 0.8249627947807312
+          }
+        ],
+        "filters": {
+          "project": "mvp-auto-test-1104",
+          "language": "python"
+        }
+      },
+      "target_not_in_unfiltered_top1_but_returned_in_filtered_top1": true
+    }
+  },
+  "final_gemini_pipeline": {
+    "base_commit": "c534e1d236451a6f48232ddc1664c74bbf93f4e7",
+    "target_id": 18,
+    "request_project": "mvp-auto-test-1104",
+    "file_path": "is_positive.py",
+    "lines": [
+      1,
+      2
+    ],
+    "saved_http": 200,
+    "embedding_status": "ready",
+    "dimension": 768,
+    "norm": 1.0000000610651365,
+    "unfiltered_search_rank": 2,
+    "filtered_search_rank": 1,
+    "filtered_result_ids": [
+      18,
+      6,
+      8
+    ],
+    "file_editor_navigation": "user confirmed",
+    "question": "저장된 is_positive 함수에 -3, 0, 4를 넣으면 각각 어떤 값을 반환하는지 설명해줘.",
+    "answer_cases": {
+      "-3": false,
+      "0": false,
+      "4": true
+    },
+    "citation_id": "S1",
+    "source_id": 18,
+    "source_code_and_metadata_match": true,
+    "model": "gemini-3.1-flash-lite",
+    "provider_mode": "personal Google(Gemini)",
+    "ui_usage": {
+      "input_tokens": 2261,
+      "output_tokens": 82,
+      "total_tokens": 2343
+    },
+    "ui_seconds": 2.6,
+    "ask_scope": "whole DB; active project filter explicitly ignored in UI",
+    "proof_scope": "Save log and Windows screenshots/user confirmation; original /ask body and headers not collected",
+    "rows_before_final_save": 17,
+    "rows_after": 18,
+    "existing_17_rows_unchanged": true,
+    "existing_evaluation_artifacts": "preserved; not rerun"
+  },
+  "openai_http_checks": [
+    {
+      "case": "personal-json",
+      "http": 200,
+      "content_type": "application/json",
+      "http_elapsed_seconds": 8.034131331000026,
+      "final_response": {
+        "status": "answered",
+        "answer": "`safe_divide(a, b)`의 반환값은 다음과 같습니다.\n- `b`가 0이면: 나눗셈을 수행하지 않고 `None`을 반환합니다. [S1]\n- `b`가 0이 아니면: `a`를 `b`로 나눈 결과인 `a / b`를 반환합니다. [S1]",
+        "sources": [
+          {
+            "id": 6,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "safe_divide.py",
+            "language": "python",
+            "function_name": "safe_divide",
+            "start_line": 1,
+            "end_line": 4,
+            "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+            "score": 0.8780109955065865,
+            "citation_id": "S1"
+          }
+        ],
+        "model": "gpt-6.1-sol",
+        "usage": {
+          "input_tokens": 2011,
+          "output_tokens": 106,
+          "total_tokens": 2117
+        },
+        "history_used": 0
+      },
+      "sse_delta_final_consistency_checked": false
+    },
+    {
+      "case": "personal-insufficient-sse",
+      "http": 200,
+      "content_type": "text/event-stream; charset=utf-8",
+      "http_elapsed_seconds": 3.9401474349999717,
+      "final_response": {
+        "status": "insufficient_context",
+        "answer": "저장된 코드만으로는 질문에 답할 근거가 부족합니다. 검색 조건이나 질문을 바꿔 주세요.",
+        "sources": [],
+        "model": "gpt-6.1-sol",
+        "usage": {
+          "input_tokens": 2283,
+          "output_tokens": 55,
+          "total_tokens": 2338
+        },
+        "history_used": 0
+      },
+      "sse_delta_final_consistency_checked": true
+    },
+    {
+      "case": "server-default-sse",
+      "http": 200,
+      "content_type": "text/event-stream; charset=utf-8",
+      "http_elapsed_seconds": 4.75976872199999,
+      "final_response": {
+        "status": "answered",
+        "answer": "`safe_divide(a, b)`의 반환값은 다음과 같습니다.\n- `b`가 0이면 나눗셈을 수행하지 않고 `None`을 반환합니다. [S1]\n- `b`가 0이 아니면 `a / b`, 즉 `a`를 `b`로 나눈 값을 반환합니다. [S1]",
+        "sources": [
+          {
+            "id": 6,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "safe_divide.py",
+            "language": "python",
+            "function_name": "safe_divide",
+            "start_line": 1,
+            "end_line": 4,
+            "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+            "score": 0.8780109955065865,
+            "citation_id": "S1"
+          }
+        ],
+        "model": "gpt-6.1-sol",
+        "usage": {
+          "input_tokens": 2011,
+          "output_tokens": 103,
+          "total_tokens": 2114
+        },
+        "history_used": 0
+      },
+      "sse_delta_final_consistency_checked": true
+    },
+    {
+      "case": "personal-followup-json",
+      "http": 200,
+      "content_type": "application/json",
+      "http_elapsed_seconds": 4.068827781999971,
+      "final_response": {
+        "status": "answered",
+        "answer": "`safe_divide`는 `b`가 음수일 때 별도로 처리하지 않습니다. `b == 0` 조건에 해당하지 않으므로 `a / b`의 결과를 그대로 반환합니다. [S3]",
+        "sources": [
+          {
+            "id": 6,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "safe_divide.py",
+            "language": "python",
+            "function_name": "safe_divide",
+            "start_line": 1,
+            "end_line": 4,
+            "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+            "score": 0.775680661201477,
+            "citation_id": "S3"
+          }
+        ],
+        "model": "gpt-6.1-sol",
+        "usage": {
+          "input_tokens": 2173,
+          "output_tokens": 72,
+          "total_tokens": 2245
+        },
+        "history_used": 1
+      },
+      "sse_delta_final_consistency_checked": false
+    }
+  ],
+  "openai_four_responses_usage": {
+    "input_tokens": 8478,
+    "output_tokens": 336,
+    "total_tokens": 8814
+  },
+  "actual_invalid_key_check": {
+    "http": 401,
+    "content_type": "application/json",
+    "elapsed_seconds": 0.5523354240000344,
+    "body": {
+      "detail": {
+        "code": "llm_key_invalid",
+        "message": "AI 키와 해당 제공자의 모델 사용 권한을 확인해 주세요."
+      }
+    }
+  },
+  "additional_ui_observations": [
+    {
+      "provider": "openai",
+      "case": "safe_divide normal",
+      "model": "gpt-6.1-sol",
+      "input_tokens": 2028,
+      "output_tokens": 78,
+      "total_tokens": 2106,
+      "ui_seconds": 4.2
+    },
+    {
+      "provider": "openai",
+      "case": "JWT insufficient",
+      "model": "gpt-6.1-sol",
+      "input_tokens": 2283,
+      "output_tokens": 58,
+      "total_tokens": 2341,
+      "ui_seconds": 4.3
+    },
+    {
+      "provider": "openai",
+      "case": "followup",
+      "model": "gpt-6.1-sol",
+      "input_tokens": 2012,
+      "output_tokens": 74,
+      "total_tokens": 2086,
+      "ui_seconds": 5.2,
+      "history_turns_shown": 1,
+      "source_id": 6,
+      "citation_id": "S2"
+    },
+    {
+      "provider": "google",
+      "case": "JWT insufficient",
+      "model": "gemini-3.1-flash-lite",
+      "input_tokens": 2584,
+      "output_tokens": 48,
+      "total_tokens": 2632,
+      "ui_seconds": 17.7
+    },
+    {
+      "provider": "anthropic",
+      "case": "connection",
+      "confirmation": "Extension owner success relayed by user",
+      "model": null,
+      "usage": null,
+      "insufficient_context_result": null
+    }
+  ],
+  "checks_previously_run": {
+    "backend_unit": 103,
+    "extension_unit_after_hint_fix": 72,
+    "extension_typecheck_lint_build": "passed",
+    "this_documentation_reran_tests": false
+  },
+  "quality_scope": "New integration example only; frozen 10-question model comparison and 25-question quality evaluation preserved and not rerun",
+  "remaining": [
+    "Other filter UI combinations, reset and missing values",
+    "Cancel, late response and error recovery",
+    "Copy, insertion and comparison UI",
+    "Key deletion and explicit server-default mode switch",
+    "Team evaluation UI",
+    "Claude detailed model/usage/insufficient evidence and actual permission error",
+    "Team cross review and poster materials"
+  ]
+}
