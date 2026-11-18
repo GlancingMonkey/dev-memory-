@@ -726,6 +726,24 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
       this.view.webview.postMessage({ type: 'keyState', state: await this.keyState(), show });
     }
   }
+  // 일반 AI 질문과 팀 평가가 같은 개인 키 선택·전송 규칙을 사용한다.
+  public async keyForRequest(useServerKey = false): Promise<{
+    key: { provider: LlmProvider; value: string } | undefined;
+    keyUsed: string | null;
+    keyBlocked: boolean;
+  }> {
+    const config = vscode.workspace.getConfiguration('codeMemory');
+    const stored = config.get<boolean>('mock', true) || useServerKey || !this.keyPrefs().useOwn
+      ? undefined : await this.readKey();
+    const keyBlocked = !!stored && !canSendKey(config.get<string>('apiUrl', 'http://localhost:8000'));
+    const key = stored && !keyBlocked ? { provider: stored.provider, value: stored.key } : undefined;
+    return {
+      key,
+      keyUsed: key ? LLM_PROVIDERS.find((p) => p.id === key.provider)?.label ?? key.provider : null,
+      keyBlocked,
+    };
+  }
+
   // 시연 모드 켜기/끄기 (명령 팔레트·상태 표시줄 메뉴)
   public async toggleDemo(): Promise<void> {
     this.pendingDemo = true;
@@ -1035,14 +1053,7 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
           this.askCtrls.set(msg.reqId, ctrl);
           const started = Date.now();
           // 사용자 AI 키: 켜져 있고, mock 이 아니고, 보내도 되는 주소일 때만 싣는다
-          const stored = mock || msg.useServerKey || !this.keyPrefs().useOwn ? undefined : await this.readKey();
-          const apiUrl = vscode.workspace.getConfiguration('codeMemory').get<string>('apiUrl', 'http://localhost:8000');
-          const keyBlocked = !!stored && !canSendKey(apiUrl);
-          const key = stored && !keyBlocked ? { provider: stored.provider, value: stored.key } : undefined;
-          const keyInfo = {
-            keyUsed: key ? LLM_PROVIDERS.find((p) => p.id === key.provider)?.label ?? key.provider : null,
-            keyBlocked,
-          };
+          const { key, ...keyInfo } = await this.keyForRequest(!!msg.useServerKey);
           try {
             const result = await askBackend(msg.q, {
               key,

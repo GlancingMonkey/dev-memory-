@@ -305,7 +305,7 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vscode-test",
-    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js",
+    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js out/test/evaluationKey.test.js",
     "vsix": "npx --yes @vscode/vsce@3 package --no-dependencies --skip-license"
   },
   "devDependencies": {

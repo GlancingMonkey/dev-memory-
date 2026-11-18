@@ -114,16 +114,22 @@ export class EvaluationRunner {
       return;
     }
     this.last = run;
-    this.running = true;
     const config = vscode.workspace.getConfiguration('codeMemory');
     const mock = config.get<boolean>('mock', true);
     const limit = clamp(config.get<number>('searchLimit'), 1, 20, 10);
+    const credentials = run.mode === 'ask' ? await this.provider.keyForRequest() : undefined;
+    if (credentials?.keyBlocked) {
+      vscode.window.showWarningMessage('이 서버 주소로는 개인 AI 키를 보낼 수 없어 평가를 중단했어요. localhost/HTTPS 주소를 확인하거나 서버 기본 키를 명시적으로 선택한 뒤 다시 실행하세요.');
+      return;
+    }
+    const keyLabel = mock ? 'mock' : credentials?.keyUsed ?? '서버 기본 키';
+    this.running = true;
     const rows: EvalRow[] = [];
     let cancelled = false;
 
     try {
       await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Code Memory 평가', cancellable: true },
+        { location: vscode.ProgressLocation.Notification, title: `Code Memory 평가${run.mode === 'ask' ? ' · ' + keyLabel : ''}`, cancellable: true },
         async (progress, token) => {
           const ctrl = new AbortController();
           token.onCancellationRequested(() => { cancelled = true; ctrl.abort(); });
@@ -150,7 +156,7 @@ export class EvaluationRunner {
             if (run.mode === 'ask' && !token.isCancellationRequested) {
               const t1 = Date.now();
               try {
-                const r = await askBackend(q.q, { history: [], signal: ctrl.signal, onSources: () => undefined, onDelta: () => undefined });
+                const r = await askBackend(q.q, { key: credentials?.key, history: [], signal: ctrl.signal, onSources: () => undefined, onDelta: () => undefined });
                 row.ask = { status: r.status, ms: Date.now() - t1, totalTokens: r.usage?.total_tokens ?? null, citations: r.citations.length };
               } catch (err) {
                 if (token.isCancellationRequested) {
@@ -175,7 +181,7 @@ export class EvaluationRunner {
     }
     const where = mock ? 'mock (서버 호출 안 함 · 샘플 결과)' : `실제 서버 ${config.get<string>('apiUrl', 'http://localhost:8000')}`;
     const meta = `${where} · 질문 ${rows.length}개${cancelled ? ` (취소해서 ${questions.length}개 중 일부)` : ''} · limit ${limit} · `
-      + `${run.mode === 'ask' ? 'AI 답변 포함' : '검색만'} · 파일 ${vscode.workspace.asRelativePath(run.file)}`;
+      + `${run.mode === 'ask' ? `AI 답변 포함 · ${keyLabel}` : '검색만'} · 파일 ${vscode.workspace.asRelativePath(run.file)}`;
     this.lastResult = { rows, meta, time: new Date().toISOString() };
     this.show(mock);
   }
