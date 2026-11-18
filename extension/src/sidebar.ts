@@ -3349,7 +3349,7 @@ function getHtml(webview: vscode.Webview): string {
       const uncited = r.sources.filter(function (s) { return r.citations.indexOf(s.citation_id) < 0; });
       const shown = cited.length ? cited : r.sources;
       parts.push(el('div', 'asrc-title', cited.length
-        ? '답변에 쓰인 코드 ' + cited.length + '개 · [S1] 을 누르면 이동'
+        ? '답변에 쓰인 코드 ' + cited.length + '개 · 본문의 출처 번호를 누르면 이동'
         : '참고 코드 ' + r.sources.length + '개'));
       const box = el('div', 'asrc');
       shown.forEach(function (s, i) {
