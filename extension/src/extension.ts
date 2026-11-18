@@ -1,8 +1,60 @@
 import * as vscode from 'vscode';
-import { COMPARE_SCHEME, compareDocs, SaveRecord, SearchViewProvider } from './sidebar';
+import { COMPARE_SCHEME, compareDocs, findDuplicate, SaveRecord, SearchViewProvider } from './sidebar';
+import { EvaluationRunner } from './evaluation';
 import {
-  adjustEndLine, clamp, EmbeddingStatus, findFunctionNameByRegex, formatSeconds, parseSaveResponse, pickSymbol, SaveUnconfirmedError, SimpleSymbol,
+  adjustEndLine, clamp, EmbeddingStatus, findFunctionNameByRegex, formatSeconds, maskSecrets, parseSaveResponse, pickSymbol, SaveUnconfirmedError,
+  scanSecrets, SimpleSymbol,
 } from './logic';
+
+// 저장 전 비밀값 확인 때 에디터에 표시하는 노란 물결
+const secretDecoration = vscode.window.createTextEditorDecorationType({
+  textDecoration: 'underline wavy',
+  backgroundColor: new vscode.ThemeColor('editorWarning.background'),
+  overviewRulerColor: new vscode.ThemeColor('editorWarning.foreground'),
+  overviewRulerLane: vscode.OverviewRulerLane.Right,
+});
+
+// 비밀값이 있으면 한 번 멈춰서 묻는다. 돌려주는 값: 'mask' | 'keep' | 'none'(없음) | undefined(취소)
+async function confirmSecrets(snippet: Snippet): Promise<{ choice: 'mask' | 'keep' | 'none'; count: number } | undefined> {
+  if (!vscode.workspace.getConfiguration('codeMemory').get<boolean>('secretScan', true)) {
+    return { choice: 'none', count: 0 };
+  }
+  const findings = scanSecrets(snippet.code);
+  if (!findings.length) {
+    return { choice: 'none', count: 0 };
+  }
+  // 저장하려는 범위(지금 선택) 안에서 의심 부분을 표시
+  const editor = vscode.window.activeTextEditor;
+  if (editor) {
+    const base = editor.document.offsetAt(editor.selection.start);
+    editor.setDecorations(secretDecoration, findings.map((f) =>
+      new vscode.Range(editor.document.positionAt(base + f.start), editor.document.positionAt(base + f.end))));
+  }
+  const lines = findings.slice(0, 6).map((f) => `· ${snippet.start_line + f.line - 1}줄 — ${f.label}`);
+  if (findings.length > 6) {
+    lines.push(`· 그 밖에 ${findings.length - 6}개`);
+  }
+  try {
+    const pick = await vscode.window.showWarningMessage(
+      `비밀값으로 보이는 게 ${findings.length}개 있어요`,
+      {
+        modal: true,
+        detail: `이 코드는 서버와 AI 답변(LLM)에 전달돼요.\n\n${lines.join('\n')}\n\n가리고 저장하면 서버로 가는 코드에서만 가려요. 내 파일은 그대로예요.`,
+      },
+      '가리고 저장', '그대로 저장',
+    );
+    if (pick === '가리고 저장') {
+      snippet.code = maskSecrets(snippet.code, findings);
+      return { choice: 'mask', count: findings.length };
+    }
+    if (pick === '그대로 저장') {
+      return { choice: 'keep', count: findings.length };
+    }
+    return undefined;
+  } finally {
+    editor?.setDecorations(secretDecoration, []);
+  }
+}
 // ─────────────────────────────────────────────
 // 1. 스니펫의 모양
 //    Snippet   = 백엔드로 "보내는" 객체. 계약의 7개 필드만 들어간다.
@@ -286,7 +338,7 @@ class FunctionLens implements vscode.CodeLensProvider {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-  const searchProvider = new SearchViewProvider(context.workspaceState, context.globalState);
+  const searchProvider = new SearchViewProvider(context.workspaceState, context.globalState, context.secrets);
 
   const command = vscode.commands.registerCommand('codeMemory.saveSnippet', async () => {
     if (saving) {
@@ -317,6 +369,52 @@ export function activate(context: vscode.ExtensionContext) {
         snippet.function_name = name.trim() || null;
       }
 
+      // 비밀값 확인 — 가리면 서버로 가는 코드만 바뀐다
+      const secret = await confirmSecrets(snippet);
+      if (!secret) {
+        vscode.window.setStatusBarMessage('Code Memory: 저장 취소 (비밀값 확인)', 3000);
+        return;
+      }
+      const maskNote = secret.choice === 'mask' ? ` · 비밀값 ${secret.count}개 가림` : '';
+
+      // 중복 확인 — 거의 같은 코드가 이미 저장돼 있으면 한 번 묻는다 (검색 실패는 무시하고 저장 진행)
+      const dupConfig = vscode.workspace.getConfiguration('codeMemory');
+      if (dupConfig.get<boolean>('duplicateCheck', true)) {
+        const threshold = Math.min(1, Math.max(0.5, dupConfig.get<number>('duplicateThreshold', 0.95)));
+        let dup: Awaited<ReturnType<typeof findDuplicate>> = null;
+        try {
+          dup = await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Window, title: 'Code Memory: 비슷한 코드 확인 중…' },
+            () => findDuplicate(snippet.code, threshold));
+        } catch (err) {
+          output.appendLine(`[중복 확인] 건너뜀: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        if (dup) {
+          const r = dup.result;
+          const name = r.function_name ?? r.file_path.split('/').pop() ?? '';
+          const pick = await vscode.window.showInformationMessage(
+            '이미 거의 같은 코드가 저장돼 있어요',
+            {
+              modal: true,
+              detail: `${name} · ${r.file_path}:${r.start_line}-${r.end_line} · id ${r.id} · 유사도 ${dup.score.toFixed(2)}`
+                + `\n\n그래도 저장하면 새 행으로 하나 더 저장돼요. (기준 ${threshold.toFixed(2)} 은 설정 duplicateThreshold)`,
+            },
+            '그래도 저장', '기존 것 보기',
+          );
+          if (pick === '기존 것 보기') {
+            void searchProvider.searchFor(name);
+          }
+          if (pick !== '그래도 저장') {
+            vscode.window.setStatusBarMessage('Code Memory: 저장 취소 (이미 비슷한 코드 있음)', 3000);
+            return;
+          }
+          output.appendLine(`[중복 확인] id ${r.id} 와 유사도 ${dup.score.toFixed(3)} — 그래도 저장`);
+        }
+      }
+      if (secret.choice !== 'none') {
+        output.appendLine(`[비밀값] ${secret.count}개 발견 → ${secret.choice === 'mask' ? '가리고 저장' : '그대로 저장'}`);
+      }
+
       output.appendLine(`[${new Date().toLocaleTimeString()}] 보낼 스니펫 (원본: ${absolutePath})`);
       output.appendLine(JSON.stringify(snippet, null, 2));
 
@@ -338,6 +436,7 @@ export function activate(context: vscode.ExtensionContext) {
         file_path: snippet.file_path,
         start_line: snippet.start_line,
         end_line: snippet.end_line,
+        masked: secret.choice === 'mask' ? secret.count : undefined,
       };
 
       try {
@@ -349,7 +448,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         if (saved.mock) {
           output.appendLine(`→ [mock] 실제 저장 아님 (가짜 id=${saved.id})\n`);
-          offer(vscode.window.showInformationMessage, `[mock] 저장 흉내만 냈습니다 — ${where}`);
+          offer(vscode.window.showInformationMessage, `[mock] 저장 흉내만 냈습니다 — ${where}${maskNote}`);
           await searchProvider.addSaveRecord({ ...base, status: 'mock', elapsedMs: saved.elapsedMs });
         } else {
           // 원문 저장 여부와 검색 준비 여부를 따로 안내한다.
@@ -357,7 +456,7 @@ export function activate(context: vscode.ExtensionContext) {
           output.appendLine(`→ 원문 저장 완료 id=${saved.id} (검색 준비: ${state})\n`);
           if (saved.embedding === 'ready') {
             offer(vscode.window.showInformationMessage,
-              `저장했습니다 (id ${saved.id}) — ${where} · 검색 준비 완료`);
+              `저장했습니다 (id ${saved.id}) — ${where} · 검색 준비 완료${maskNote}`);
           } else if (saved.embedding === 'failed') {
             const advice = saved.embeddingError === 'embedding_input_invalid'
               ? '코드가 비어 있거나 임베딩 입력 한도를 넘었습니다. 같은 입력을 그대로 재처리하지 말고 해당 ID와 입력을 확인하세요.'
@@ -418,14 +517,23 @@ export function activate(context: vscode.ExtensionContext) {
   // 오늘 AI 질문 수(✦ N)를 상태 표시줄 글자 뒤에, 토큰 합계를 툴팁에 붙인다 (실제 서버 모드만)
   let baseText = '';
   let baseTooltip = '';
+  let keyLabel = '';   // 내 AI 키를 쓰는 중이면 회사 이름
   const render = () => {
     const mock = vscode.workspace.getConfiguration('codeMemory').get<boolean>('mock', true);
     const u = searchProvider.usageToday();
     const showUsage = !mock && u.count > 0;
-    status.text = baseText + (showUsage ? ` · ✦ ${u.count}` : '');
+    status.text = baseText + (showUsage ? ` · ✦ ${u.count}` : '') + (!mock && keyLabel ? ' · $(key)' : '');
     status.tooltip = baseTooltip + (mock ? '' : `\n\n오늘 AI 질문 ${u.count}번 · ${u.tokens.toLocaleString()} 토큰`
-      + '\n(저장된 답변 다시 보기는 0으로 셈 · 내 PC 기준, 자정에 초기화)');
+      + '\n(저장된 답변 다시 보기는 0으로 셈 · 내 PC 기준, 자정에 초기화)'
+      + `\nAI 키: ${keyLabel ? `내 키 (${keyLabel})` : '서버 기본 키'}`);
   };
+  const refreshKey = async () => {
+    const s = await searchProvider.keyState();
+    keyLabel = s.hasKey && s.useOwn ? s.providerLabel ?? '' : '';
+    render();
+  };
+  void refreshKey();
+  context.subscriptions.push(searchProvider.onDidChangeKey(() => void refreshKey()), context.secrets.onDidChange(() => void refreshKey()));
   const setStatus = (text: string, tooltip: string, bg?: vscode.ThemeColor) => {
     baseText = text;
     baseTooltip = tooltip;
@@ -496,7 +604,7 @@ export function activate(context: vscode.ExtensionContext) {
         ? vscode.ConfigurationTarget.Workspace
         : vscode.ConfigurationTarget.Global;
 
-    type Id = 'mock' | 'real' | 'url' | 'health' | 'settings' | 'search' | 'save' | 'ask' | 'feedback' | 'walkthrough' | 'sep';
+    type Id = 'mock' | 'real' | 'url' | 'health' | 'settings' | 'search' | 'save' | 'ask' | 'feedback' | 'key' | 'walkthrough' | 'demo' | 'sep';
     type Item = vscode.QuickPickItem & { id: Id };
     const sep = (label: string): Item => ({ id: 'sep', label, kind: vscode.QuickPickItemKind.Separator });
     const fb = searchProvider.feedbackCounts();
@@ -509,7 +617,9 @@ export function activate(context: vscode.ExtensionContext) {
       { id: 'save', label: '$(save) 코드 저장', description: 'Ctrl+Alt+S · 선택 또는 커서가 있는 함수' },
       { id: 'ask', label: '$(sparkle) 이 코드에 대해 묻기', description: 'Ctrl+Alt+A · 선택 또는 커서가 있는 함수' },
       { id: 'feedback', label: '$(export) AI 피드백 내보내기', description: `👍 ${fb.up} · 👎 ${fb.down}` },
+      { id: 'key', label: '$(key) AI 키 설정', description: keyLabel ? `내 키 (${keyLabel})` : '서버 기본 키' },
       { id: 'walkthrough', label: '$(question) 시작하기 안내' },
+      { id: 'demo', label: '$(play) 시연 모드 켜기 / 끄기', description: '학술제용 순서 안내' },
       sep('설정'),
       { id: 'url', label: '$(edit) 서버 주소 바꾸기…' },
       { id: 'health', label: '$(refresh) 연결 다시 확인' },
@@ -556,8 +666,14 @@ export function activate(context: vscode.ExtensionContext) {
       case 'feedback':
         await searchProvider.exportFeedback();
         break;
+      case 'key':
+        await searchProvider.openKeySettings();
+        break;
       case 'walkthrough':
         await vscode.commands.executeCommand('codeMemory.openWalkthrough');
+        break;
+      case 'demo':
+        await searchProvider.toggleDemo();
         break;
     }
   });
@@ -600,7 +716,12 @@ export function activate(context: vscode.ExtensionContext) {
     await searchProvider.prefillAsk(`${lead}${tail} ?`, lead.length, lead.length + tail.length);
   });
   const exportFeedback = vscode.commands.registerCommand('codeMemory.exportFeedback', () => searchProvider.exportFeedback());
-  context.subscriptions.push(askAboutSelection, exportFeedback);
+  // 성능 평가 (팀용) — 명령 팔레트로만 연다
+  const evaluation = new EvaluationRunner(searchProvider);
+  context.subscriptions.push(vscode.commands.registerCommand('codeMemory.runEvaluation', () => evaluation.start()));
+  context.subscriptions.push(askAboutSelection, exportFeedback,
+    vscode.commands.registerCommand('codeMemory.openKeySettings', () => searchProvider.openKeySettings()),
+    vscode.commands.registerCommand('codeMemory.toggleDemo', () => searchProvider.toggleDemo()));
 
   // 함수 위 글자(CodeLens) → 그 함수를 선택하고 원래 명령 실행
   const lens = new FunctionLens();
@@ -632,7 +753,7 @@ export function activate(context: vscode.ExtensionContext) {
   // 단축키(Ctrl+Alt+F) → 검색창에 커서
   const focusCommand = vscode.commands.registerCommand('codeMemory.focusSearch', () => searchProvider.focusSearch());
 
-  context.subscriptions.push(command, focusCommand, output);
+  context.subscriptions.push(command, focusCommand, output, secretDecoration);
 }
 
 export function deactivate() {}

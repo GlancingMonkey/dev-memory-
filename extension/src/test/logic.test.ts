@@ -1,7 +1,7 @@
 // logic.ts 단위 테스트 — VS Code 없이 돌아간다: npm run test:unit
 import * as assert from 'assert';
 import {
-  addUsage, adjustEndLine, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
+  addUsage, adjustEndLine, canSendKey, guessProvider, maskKey, validateKey, evalToCsv, evalToMarkdown, EvalRow, parseEvalQuestions, rankOf, summarizeEval, compareSource, maskSecrets, scanSecrets, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
 } from '../logic';
 
 const linesOf = (src: string) => {
@@ -367,3 +367,145 @@ suite('검색 필터 — GET /search?project=&language= · GET /filters', () => 
     }
   });
 });
+
+suite('저장 전 비밀값 감지 — scanSecrets / maskSecrets', () => {
+  test('모양으로 알 수 있는 키 + 이름이 수상한 변수', () => {
+    const code = 'def call():\n    key = "sk-proj-AbCdEfGhIjKlMnOpQrStUvWx12"\n    db_password = "hunter2!"\n    return 1';
+    const f = scanSecrets(code);
+    assert.deepStrictEqual(f.map((x) => [x.kind, x.line]), [['api_key', 2], ['password', 3]]);
+    const masked = maskSecrets(code, f);
+    assert.ok(masked.includes('"sk-proj-****"'), masked);
+    assert.ok(masked.includes('db_password = "****"'), masked);
+    assert.ok(!masked.includes('hunter2'));
+    assert.strictEqual(masked.split('\n').length, 4);
+  });
+  test('AWS · GitHub · Google · Slack · JWT · 주소 안 비밀번호 · 개인 키', () => {
+    const code = [
+      'a = "AKIAABCDEFGHIJKLMNOP"',
+      'b = "ghp_' + 'a'.repeat(36) + '"',
+      'c = "AIza' + 'b'.repeat(35) + '"',
+      'd = "xoxb-1234567890-abcdef"',
+      'e = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2Q"',
+      'url = "postgres://admin:S3cr3tPw@db:5432/app"',
+      '-----BEGIN RSA PRIVATE KEY-----\nMIIEow\nAAAA\n-----END RSA PRIVATE KEY-----',
+    ].join('\n');
+    const kinds = scanSecrets(code).map((x) => x.kind);
+    assert.deepStrictEqual(kinds, ['api_key', 'api_key', 'api_key', 'api_key', 'jwt', 'url_password', 'private_key']);
+    const masked = maskSecrets(code, scanSecrets(code));
+    assert.ok(masked.includes('postgres://admin:****@db'), masked);
+    assert.ok(masked.includes('-----BEGIN RSA PRIVATE KEY-----\n****\n-----END'), masked);
+    assert.ok(!masked.includes('MIIEow'));
+  });
+  test('예시·자리표시 값과 환경변수는 비밀값으로 안 봄', () => {
+    const code = [
+      'password = "****"', 'api_key = "<your-key>"', 'token = "${TOKEN}"', 'secret = os.environ["SECRET"]',
+      'password = ""', 'API_KEY = "changeme"', 'url = "postgres://user:<password>@host/db"', 'pwd = input()',
+    ].join('\n');
+    assert.deepStrictEqual(scanSecrets(code), []);
+  });
+  test('비밀값 없으면 코드 그대로', () => {
+    const code = 'def add(a, b):\n    return a + b';
+    assert.strictEqual(maskSecrets(code, scanSecrets(code)), code);
+  });
+});
+
+suite('원본 변경 감지 — compareSource', () => {
+  const saved = 'def add(a, b):\n    return a + b';
+  test('같은 자리에 그대로 (CRLF·끝 공백 무시)', () => {
+    assert.deepStrictEqual(compareSource(saved, 'def add(a, b):   \r\n    return a + b\r\n\r\nx = 1', 1, 2), { state: 'same' });
+  });
+  test('위에 코드가 추가돼서 내려감 → 위치 이동', () => {
+    assert.deepStrictEqual(compareSource(saved, 'import os\n\n\ndef add(a, b):\n    return a + b\n', 1, 2), { state: 'moved', start: 4, end: 5 });
+  });
+  test('내용이 바뀜', () => {
+    assert.deepStrictEqual(compareSource(saved, 'def add(a, b, c=0):\n    return a + b + c\n', 1, 2), { state: 'changed' });
+  });
+  test('같은 코드가 여러 곳이면 원래 자리에서 가까운 곳', () => {
+    const file = 'def add(a, b):\n    return a + b\n#\n#\n#\n#\ndef add(a, b):\n    return a + b';
+    assert.deepStrictEqual(compareSource(saved, file, 6, 7), { state: 'moved', start: 7, end: 8 });
+  });
+});
+
+suite('성능 평가 — 질문 파일 · Hit@1/Hit@3 · 내보내기', () => {
+  test('질문 파일: {questions:[…]} 또는 배열, id 없으면 Q1…, expected 숫자 하나도 허용', () => {
+    const a = parseEvalQuestions(JSON.stringify({ questions: [{ q: ' 더하기 ', expected: [12] }, { id: 'X', q: 'JWT', expected: [] }, { q: '정렬', expected: 3 }] }));
+    assert.deepStrictEqual(a.map((x) => [x.id, x.q, x.expected]), [['Q1', '더하기', [12]], ['X', 'JWT', []], ['Q3', '정렬', [3]]]);
+    assert.throws(() => parseEvalQuestions('{"questions":[{"q":""}]}'), /q 가 비어/);
+    assert.throws(() => parseEvalQuestions('{"questions":[{"q":"a","expected":["x"]}]}'), /양의 정수/);
+    assert.throws(() => parseEvalQuestions('[]'));
+  });
+  test('순위: 정답 중 처음 나온 위치', () => {
+    assert.strictEqual(rankOf([12], [3, 12, 5]), 2);
+    assert.strictEqual(rankOf([5, 9], [9, 5]), 1);
+    assert.strictEqual(rankOf([7], [1, 2]), null);
+  });
+  const rows: EvalRow[] = [
+    { id: 'Q1', q: 'a', expected: [1], rank: 1, topIds: [1], searchMs: 100, ask: { status: 'answered', ms: 4000, totalTokens: 1000, citations: 1 } },
+    { id: 'Q2', q: 'b', expected: [2], rank: 3, topIds: [9, 8, 2], searchMs: 300, ask: { status: 'answered', ms: 6000, totalTokens: 1400, citations: 2 } },
+    { id: 'Q3', q: 'c', expected: [3], rank: null, topIds: [9], searchMs: 200 },
+    { id: 'Q4', q: 'd', expected: [], rank: null, topIds: [9], searchMs: 400, ask: { status: 'insufficient_context', ms: 1000, totalTokens: null, citations: 0 } },
+    { id: 'Q5', q: 'e', expected: [5], rank: null, topIds: [], searchMs: null, searchError: '연결 안 됨' },
+  ];
+  test('요약: Hit@1·Hit@3 은 정답 있고 검색 성공한 질문만, 근거 부족은 정답 없는 질문으로', () => {
+    const s = summarizeEval(rows);
+    assert.strictEqual(s.withAnswer, 3);
+    assert.strictEqual(s.hit1, 1);
+    assert.strictEqual(s.hit3, 2);
+    assert.strictEqual(s.missed, 1);
+    assert.strictEqual(s.meanRank, 2);
+    assert.deepStrictEqual(s.buckets, { first: 1, top3: 1, top10: 0, missed: 1 });
+    assert.strictEqual(s.searchFailed, 1);
+    assert.strictEqual(s.searchAvgMs, 250);
+    assert.strictEqual(s.searchP95Ms, 400);
+    assert.strictEqual(s.asked, 3);
+    assert.strictEqual(s.askAvgTokens, 1200);
+    assert.strictEqual(s.noAnswerCorrect, 1);
+    assert.strictEqual(s.noAnswerTotal, 1);
+  });
+  test('CSV · 마크다운', () => {
+    const csv = evalToCsv([{ id: 'Q1', q: 'a, "b"', expected: [1], rank: 1, topIds: [1, 2], searchMs: 10 }]);
+    assert.ok(csv.split('\n')[1].startsWith('Q1,"a, ""b""",1,1,1,1,10,1 2'), csv);
+    const md = evalToMarkdown(rows, summarizeEval(rows), '실제 서버');
+    assert.ok(md.includes('| 한 번에 찾음 (Hit@1) | 33% (1/3) |'), md);
+    assert.ok(md.includes('| 모르는 건 모른다고 함 | 1/1 |'));
+    assert.ok(md.includes('| Q3 | c | 3 | 못 찾음 |'));
+  });
+});
+
+suite('사용자 AI 키 — 회사 짐작 · 가리기 · 보내도 되는 주소', () => {
+  test('키 모양으로 회사 짐작', () => {
+    assert.strictEqual(guessProvider('sk-ant-api03-abcdefghijklmnop'), 'anthropic');
+    assert.strictEqual(guessProvider('AIzaSyA1234567890abcdefghijklmnopqrstu'), 'google');
+    assert.strictEqual(guessProvider('sk-proj-abcdefghijklmnop'), 'openai');
+    assert.strictEqual(guessProvider('hello'), null);
+  });
+  test('가리기: 앞부분 + 끝 4자리', () => {
+    assert.strictEqual(maskKey('sk-proj-abcdefghijklmnopa1b2'), 'sk-proj-…a1b2');
+    assert.strictEqual(maskKey('AIzaSyA1234567890abcdefghijklmnopqrstu'), 'AIza…rstu');
+    assert.strictEqual(maskKey('short'), '****');
+  });
+  test('localhost 나 https 일 때만 키를 보낸다', () => {
+    assert.strictEqual(canSendKey('http://localhost:8000'), true);
+    assert.strictEqual(canSendKey('http://127.0.0.1:8000'), true);
+    assert.strictEqual(canSendKey('https://api.example.com'), true);
+    assert.strictEqual(canSendKey('http://192.168.0.5:8000'), false);
+    assert.strictEqual(canSendKey('not a url'), false);
+  });
+  test('키 검사', () => {
+    assert.strictEqual(validateKey(''), '키를 붙여넣으세요');
+    assert.ok(validateKey('sk-abc def ghij klmnop qrst'));
+    assert.strictEqual(validateKey('sk-proj-abcdefghijklmnop'), null);
+  });
+  test('401·403 은 키 오류로', () => {
+    assert.strictEqual(parseAskErrKind(401), 'key');
+    assert.strictEqual(parseAskErrKind(403), 'key');
+  });
+});
+function parseAskErrKind(status: number): string {
+  try {
+    parseAskResponse(JSON.stringify({ detail: { code: 'llm_key_invalid', message: 'x' } }), status);
+  } catch (e) {
+    return (e as AskError).kind;
+  }
+  return '';
+}

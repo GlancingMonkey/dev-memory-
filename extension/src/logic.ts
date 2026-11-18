@@ -212,7 +212,8 @@ export interface AskResponse {
 // timeout(기다리면 될 수 있음) / input(질문 문제) / unavailable(모델·DB·LLM 준비 실패)
 // bad_answer(인용 오류·미완료) / connect(서버 연결 안 됨) / server(그 밖의 HTTP 오류) / format(응답 모양이 계약과 다름)
 // cancelled(사용자가 기다리기를 취소함)
-export type AskErrorKind = 'timeout' | 'input' | 'unavailable' | 'bad_answer' | 'connect' | 'server' | 'format' | 'cancelled';
+// key(사용자가 넣은 AI 키가 틀림·한도 초과)
+export type AskErrorKind = 'timeout' | 'input' | 'unavailable' | 'bad_answer' | 'connect' | 'server' | 'format' | 'cancelled' | 'key';
 
 export class AskError extends Error {
   constructor(
@@ -248,6 +249,9 @@ export function askErrorFor(httpStatus: number, detail: string): AskError {
       return new AskError('timeout', '서버 응답 시간 초과', d || '답변 생성이 서버 제한 시간을 넘었습니다. 자동으로 다시 보내지 않습니다.');
     case 502:
       return new AskError('bad_answer', '답변을 검증하지 못했습니다', d || '인용이 잘못됐거나 답변이 끝나지 않았습니다.');
+    case 401:
+    case 403:
+      return new AskError('key', 'AI 키를 확인하세요', d || '넣은 AI 키가 맞지 않거나 사용 한도를 넘었어요.');
     default:
       return new AskError('server', `서버 오류 (HTTP ${httpStatus})`, d || '서버 로그를 확인하세요.');
   }
@@ -585,6 +589,368 @@ export function parseFilterOptions(text: string): FilterOptions {
     return out;
   };
   return { projects: read('projects'), languages: read('languages') };
+}
+
+// ── 11. 저장 전 비밀값 감지 — LLM 없이 규칙으로만. 서버로 보낼 코드에서만 가리고 사용자 파일은 안 건드린다
+export type SecretKind = 'api_key' | 'private_key' | 'password' | 'url_password' | 'jwt';
+export interface SecretFinding {
+  kind: SecretKind;
+  label: string;   // 화면에 보일 이름 (예: "API 키 (OpenAI)")
+  line: number;    // 코드 안에서 몇 번째 줄인지 (1부터)
+  start: number;   // 가릴 부분 — code 문자열 위치
+  end: number;
+  keep: number;    // 앞에서 남길 글자 수 (뭐였는지 알아볼 수 있게)
+}
+
+// 예시·자리표시 값은 비밀값으로 보지 않는다
+function isPlaceholder(v: string): boolean {
+  const s = v.trim();
+  return s.length < 4
+    || /^\*+$/.test(s)
+    || /^<.*>$/.test(s)
+    || /^\$\{.*\}$/.test(s) || /^\{\{.*\}\}$/.test(s)
+    || /^(x{3,}|changeme|change_me|your[_-]?.*|example.*|dummy.*|placeholder.*|sample.*|test|none|null|todo|password|secret|token)$/i.test(s)
+    || /\*{4}$/.test(s);
+}
+
+export function scanSecrets(code: string): SecretFinding[] {
+  const found: SecretFinding[] = [];
+  const lineOf = (pos: number) => code.slice(0, pos).split('\n').length;
+  const add = (kind: SecretKind, label: string, start: number, end: number, keep: number) => {
+    if (end <= start || found.some((f) => start < f.end && end > f.start)) {
+      return;   // 이미 찾은 범위와 겹치면 건너뜀
+    }
+    found.push({ kind, label, line: lineOf(start), start, end, keep });
+  };
+  const each = (re: RegExp, fn: (m: RegExpExecArray) => void) => {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(code)) !== null) {
+      fn(m);
+      if (m[0].length === 0) {
+        re.lastIndex++;
+      }
+    }
+  };
+
+  // 1) 개인 키 블록 — 머리·꼬리 줄은 남기고 내용만
+  each(/-----BEGIN ([A-Z ]*)PRIVATE KEY-----([\s\S]*?)(-----END [A-Z ]*PRIVATE KEY-----|$)/g, (m) => {
+    const bodyStart = m.index + m[0].indexOf(m[2]);
+    add('private_key', '개인 키', bodyStart, bodyStart + m[2].length, 0);
+  });
+  // 2) 모양으로 알 수 있는 키
+  const keys: [RegExp, string, number][] = [
+    [/\bsk-(?:proj-|live-|test-|ant-)?[A-Za-z0-9_-]{20,}/g, 'API 키 (sk-…)', 8],
+    [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, 'AWS 액세스 키', 4],
+    [/\bgh[pousr]_[A-Za-z0-9]{30,}\b/g, 'GitHub 토큰', 4],
+    [/\bgithub_pat_[A-Za-z0-9_]{22,}\b/g, 'GitHub 토큰', 11],
+    [/\bAIza[0-9A-Za-z_-]{35}\b/g, 'Google API 키', 4],
+    [/\bxox[abposr]-[A-Za-z0-9-]{10,}\b/g, 'Slack 토큰', 5],
+    [/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, 'JWT 토큰', 3],
+  ];
+  for (const [re, label, keep] of keys) {
+    each(re, (m) => add(re.source.startsWith('\\beyJ') ? 'jwt' : 'api_key', label, m.index, m.index + m[0].length, Math.min(keep, m[0].length)));
+  }
+  // 3) 주소 안 비밀번호  scheme://user:비번@host
+  each(/\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/'"]+:([^\s@/'"]+)@/gi, (m) => {
+    if (isPlaceholder(m[1])) {
+      return;
+    }
+    const s = m.index + m[0].lastIndexOf(m[1] + '@');
+    add('url_password', '주소 안 비밀번호', s, s + m[1].length, 0);
+  });
+  // 4) 이름이 수상한 변수에 문자열을 넣은 것  password = "…"
+  each(/([A-Za-z_][\w.-]*?(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|auth[_-]?key|credential)[\w-]*)["']?\s*(?:[:=]|=>)\s*(["'`])([^"'`\n]+)\2/gi, (m) => {
+    if (isPlaceholder(m[3])) {
+      return;
+    }
+    const s = m.index + m[0].lastIndexOf(m[2] + m[3] + m[2]) + 1;
+    add('password', '비밀번호·토큰 (' + m[1] + ')', s, s + m[3].length, 0);
+  });
+  return found.sort((a, b) => a.start - b.start);
+}
+
+// 찾은 부분을 가린다 — 앞 keep 글자 + "****"
+export function maskSecrets(code: string, findings: SecretFinding[]): string {
+  let out = '';
+  let pos = 0;
+  for (const f of [...findings].sort((a, b) => a.start - b.start)) {
+    if (f.start < pos) {
+      continue;
+    }
+    const value = code.slice(f.start, f.end);
+    const masked = f.kind === 'private_key' ? '\n****\n' : value.slice(0, f.keep) + '****';
+    out += code.slice(pos, f.start) + masked;
+    pos = f.end;
+  }
+  return out + code.slice(pos);
+}
+
+// ── 12. 검색 결과의 원본이 바뀌었는지 — 저장한 코드와 지금 파일 비교
+//    줄바꿈(CRLF)·줄 끝 공백 차이는 같은 걸로 본다
+export type SourceState = 'same' | 'moved' | 'changed';
+export interface SourceCheck {
+  state: SourceState;
+  start?: number;   // moved 일 때 새 위치 (1부터)
+  end?: number;
+}
+function normLines(text: string): string[] {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/\s+$/, ''));
+  while (lines.length && lines[lines.length - 1] === '') {
+    lines.pop();
+  }
+  return lines;
+}
+export function compareSource(saved: string, fileText: string, startLine: number, endLine: number): SourceCheck {
+  const want = normLines(saved);
+  const file = fileText.replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/\s+$/, ''));
+  if (!want.length) {
+    return { state: 'changed' };
+  }
+  const same = (at: number) => at >= 0 && at + want.length <= file.length && want.every((l, i) => file[at + i] === l);
+  const at = startLine - 1;
+  if (same(at) && (endLine - startLine + 1 >= want.length)) {
+    return { state: 'same' };
+  }
+  // 다른 위치에 그대로 있으면 위치 이동 — 원래 자리에서 가까운 곳 우선
+  let best = -1;
+  for (let i = 0; i + want.length <= file.length; i++) {
+    if (same(i) && (best < 0 || Math.abs(i - at) < Math.abs(best - at))) {
+      best = i;
+    }
+  }
+  if (best >= 0) {
+    return best === at ? { state: 'same' } : { state: 'moved', start: best + 1, end: best + want.length };
+  }
+  return { state: 'changed' };
+}
+
+// ── 13. 성능 평가 — 질문 파일(질문 + 정답 코드 ID)로 검색이 원하는 코드를 몇 등에 띄우는지 잰다
+//    Hit@1 = 한 번에 찾음(정답이 1등) · Hit@3 = 3개 안에 찾음 · 정답이 없는 질문은 "모르는 건 모른다고 하는지"로 따로 본다
+export interface EvalQuestion {
+  id: string;
+  q: string;
+  expected: number[];      // 정답 코드 ID. 비어 있으면 정답 없는 질문
+  project?: string;        // 선택: 이 질문만 범위를 걸 때
+  language?: string;
+}
+export function parseEvalQuestions(text: string): EvalQuestion[] {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error('JSON 형식이 아닙니다');
+  }
+  const list = Array.isArray(data) ? data : data && typeof data === 'object' ? (data as { questions?: unknown }).questions : undefined;
+  if (!Array.isArray(list) || !list.length) {
+    throw new Error('questions 배열이 없거나 비어 있습니다');
+  }
+  return list.map((v, i) => {
+    const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+    const q = typeof o.q === 'string' ? o.q.trim() : '';
+    if (!q) {
+      throw new Error(`${i + 1}번째 질문의 q 가 비어 있습니다`);
+    }
+    const expected = Array.isArray(o.expected) ? o.expected : o.expected === undefined || o.expected === null ? [] : [o.expected];
+    if (!expected.every((x) => isInt(x) && x > 0)) {
+      throw new Error(`${i + 1}번째 질문의 expected 는 코드 ID(양의 정수) 배열이어야 합니다`);
+    }
+    return {
+      id: typeof o.id === 'string' && o.id.trim() ? o.id.trim() : `Q${i + 1}`,
+      q,
+      expected: expected as number[],
+      project: typeof o.project === 'string' ? o.project : undefined,
+      language: typeof o.language === 'string' ? o.language : undefined,
+    };
+  });
+}
+
+export interface EvalRow {
+  id: string;
+  q: string;
+  expected: number[];
+  rank: number | null;          // 정답이 처음 나온 순위 (1부터). 못 찾으면 null. 정답 없는 질문이면 null
+  topIds: number[];             // 검색 결과 ID (위에서부터)
+  searchMs: number | null;      // 검색 시간. 실패면 null
+  searchError?: string;
+  ask?: {                       // AI 답변까지 잰 경우
+    status: 'answered' | 'insufficient_context' | 'error';
+    ms: number;
+    totalTokens: number | null;
+    citations: number;
+    error?: string;
+  };
+}
+
+// 정답이 처음 나온 순위
+export function rankOf(expected: number[], ids: number[]): number | null {
+  const i = ids.findIndex((id) => expected.includes(id));
+  return i < 0 ? null : i + 1;
+}
+
+function percentile(values: number[], p: number): number | null {
+  if (!values.length) {
+    return null;
+  }
+  const s = [...values].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.max(0, Math.ceil((p / 100) * s.length) - 1))];
+}
+const avg = (v: number[]) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : null);
+
+export interface EvalSummary {
+  total: number;
+  withAnswer: number;           // 정답이 있는 질문 수 (Hit 계산 대상)
+  hit1: number;
+  hit3: number;
+  missed: number;               // 정답 있는데 결과에 없음
+  meanRank: number | null;      // 찾은 것들의 평균 순위
+  buckets: { first: number; top3: number; top10: number; missed: number };
+  searchFailed: number;
+  searchAvgMs: number | null;
+  searchP95Ms: number | null;
+  asked: number;
+  askAvgMs: number | null;
+  askAvgTokens: number | null;
+  askErrors: number;
+  noAnswerTotal: number;        // 정답 없는 질문 수 (AI 답변까지 잰 것만)
+  noAnswerCorrect: number;      // 그중 근거 부족으로 답한 수
+}
+export function summarizeEval(rows: EvalRow[]): EvalSummary {
+  const ans = rows.filter((r) => r.expected.length && r.searchMs !== null);
+  const ranks = ans.map((r) => r.rank).filter((x): x is number => x !== null);
+  const times = rows.map((r) => r.searchMs).filter((x): x is number => x !== null);
+  const asked = rows.filter((r) => r.ask);
+  const askOk = asked.filter((r) => r.ask!.status !== 'error');
+  const toks = askOk.map((r) => r.ask!.totalTokens).filter((x): x is number => x !== null);
+  const noAns = asked.filter((r) => !r.expected.length && r.ask!.status !== 'error');
+  return {
+    total: rows.length,
+    withAnswer: ans.length,
+    hit1: ranks.filter((x) => x === 1).length,
+    hit3: ranks.filter((x) => x <= 3).length,
+    missed: ans.length - ranks.length,
+    meanRank: avg(ranks),
+    buckets: {
+      first: ranks.filter((x) => x === 1).length,
+      top3: ranks.filter((x) => x === 2 || x === 3).length,
+      top10: ranks.filter((x) => x > 3).length,
+      missed: ans.length - ranks.length,
+    },
+    searchFailed: rows.filter((r) => r.searchMs === null).length,
+    searchAvgMs: avg(times),
+    searchP95Ms: percentile(times, 95),
+    asked: asked.length,
+    askAvgMs: avg(askOk.map((r) => r.ask!.ms)),
+    askAvgTokens: avg(toks),
+    askErrors: asked.length - askOk.length,
+    noAnswerTotal: noAns.length,
+    noAnswerCorrect: noAns.filter((r) => r.ask!.status === 'insufficient_context').length,
+  };
+}
+
+// 내보내기 — CSV (엑셀용) / 마크다운 표 (포스터·문서용)
+export function evalToCsv(rows: EvalRow[]): string {
+  const esc = (v: unknown) => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const head = ['id', 'question', 'expected', 'rank', 'hit1', 'hit3', 'search_ms', 'top_ids', 'ask_status', 'ask_ms', 'ask_tokens', 'ask_citations', 'error'];
+  const lines = rows.map((r) => [
+    r.id, r.q, r.expected.join(' '), r.rank ?? '', r.expected.length ? (r.rank === 1 ? 1 : 0) : '', r.expected.length ? (r.rank !== null && r.rank <= 3 ? 1 : 0) : '',
+    r.searchMs ?? '', r.topIds.join(' '), r.ask?.status ?? '', r.ask?.ms ?? '', r.ask?.totalTokens ?? '', r.ask?.citations ?? '',
+    r.searchError ?? r.ask?.error ?? '',
+  ].map(esc).join(','));
+  return [head.join(','), ...lines].join('\n') + '\n';
+}
+export function evalToMarkdown(rows: EvalRow[], s: EvalSummary, meta: string): string {
+  const pct = (n: number, d: number) => (d ? Math.round((n / d) * 100) + '%' : '-');
+  const sec = (ms: number | null) => (ms === null ? '-' : (ms / 1000).toFixed(2) + '초');
+  const out = [
+    '## Code Memory 평가', '', meta, '',
+    '| 지표 | 값 |', '|---|---|',
+    `| 한 번에 찾음 (Hit@1) | ${pct(s.hit1, s.withAnswer)} (${s.hit1}/${s.withAnswer}) |`,
+    `| 3개 안에 찾음 (Hit@3) | ${pct(s.hit3, s.withAnswer)} (${s.hit3}/${s.withAnswer}) |`,
+    `| 정답 평균 순위 | ${s.meanRank === null ? '-' : s.meanRank.toFixed(1) + '등'} |`,
+    `| 못 찾은 질문 | ${s.missed}개 |`,
+    `| 찾는 데 걸린 시간 (평균 / p95) | ${sec(s.searchAvgMs)} / ${sec(s.searchP95Ms)} |`,
+  ];
+  if (s.asked) {
+    out.push(`| AI 답변 평균 토큰 | ${s.askAvgTokens === null ? '-' : Math.round(s.askAvgTokens).toLocaleString()} |`,
+      `| AI 답변 평균 시간 | ${sec(s.askAvgMs)} |`,
+      `| 모르는 건 모른다고 함 | ${s.noAnswerCorrect}/${s.noAnswerTotal} |`);
+  }
+  out.push('', '| # | 질문 | 정답 ID | 순위 | 검색 | AI | 토큰 |', '|---|---|---|---|---|---|---|');
+  for (const r of rows) {
+    const rank = !r.expected.length ? '-' : r.rank === null ? '못 찾음' : r.rank + '등';
+    const ai = r.ask ? (r.ask.status === 'error' ? '오류' : r.ask.status === 'answered' ? `답변 · 인용 ${r.ask.citations}` : '근거 부족') : '-';
+    out.push(`| ${r.id} | ${r.q.replace(/\|/g, '\\|')} | ${r.expected.join(', ') || '-'} | ${rank} | ${sec(r.searchMs)} | ${ai} | ${r.ask?.totalTokens ?? '-'} |`);
+  }
+  return out.join('\n') + '\n';
+}
+
+// ── 14. 사용자 AI 키 (OpenAI · Anthropic · Google Gemini) — 키는 VS Code 비밀 저장소에만, /ask 요청에만 헤더로
+//    헤더 이름은 Backend 와 정한 값으로 여기 한 곳만 바꾸면 된다
+export const LLM_KEY_HEADER = 'X-LLM-API-Key';
+export const LLM_PROVIDER_HEADER = 'X-LLM-Provider';
+export type LlmProvider = 'openai' | 'anthropic' | 'google';
+export const LLM_PROVIDERS: { id: LlmProvider; label: string; hint: string; url: string }[] = [
+  { id: 'openai', label: 'OpenAI', hint: 'sk-…', url: 'https://platform.openai.com/api-keys' },
+  { id: 'anthropic', label: 'Anthropic (Claude)', hint: 'sk-ant-…', url: 'https://console.anthropic.com/settings/keys' },
+  { id: 'google', label: 'Google (Gemini)', hint: 'AIza…', url: 'https://aistudio.google.com/apikey' },
+];
+
+// 키 모양으로 어느 회사 키인지 짐작 (틀릴 수 있어서 화면에서 바꿀 수 있다). 웹페이지에도 그대로 들어간다
+export function guessProvider(key: string): LlmProvider | null {
+  const k = key.trim();
+  if (/^sk-ant-/.test(k)) {
+    return 'anthropic';
+  }
+  if (/^AIza[0-9A-Za-z_-]{20,}$/.test(k)) {
+    return 'google';
+  }
+  if (/^sk-/.test(k)) {
+    return 'openai';
+  }
+  return null;
+}
+
+// 화면 표시용 — 앞부분 조금 + 끝 4자리
+export function maskKey(key: string): string {
+  const k = key.trim();
+  if (k.length <= 8) {
+    return '****';
+  }
+  const dash = k.lastIndexOf('-', 12);
+  const head = dash > 0 && dash <= 12 ? k.slice(0, dash + 1) : k.slice(0, 4);
+  return `${head}…${k.slice(-4)}`;
+}
+
+// 키를 실어 보내도 되는 주소인지 — 내 PC(localhost) 이거나 https 일 때만
+export function canSendKey(apiUrl: string): boolean {
+  try {
+    const u = new URL(apiUrl);
+    if (u.protocol === 'https:') {
+      return true;
+    }
+    return u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]', '::1'].includes(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+// 붙여넣은 키가 그럴듯한지 (공백·줄바꿈이 섞이면 거절)
+export function validateKey(key: string): string | null {
+  const k = key.trim();
+  if (!k) {
+    return '키를 붙여넣으세요';
+  }
+  if (/\s/.test(k)) {
+    return '키에 공백이나 줄바꿈이 들어 있어요';
+  }
+  if (k.length < 20) {
+    return '키가 너무 짧아요';
+  }
+  return null;
 }
 
 // ── 8. 기타

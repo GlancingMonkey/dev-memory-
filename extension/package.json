@@ -58,6 +58,21 @@
       {
         "command": "codeMemory.runOnFunction",
         "title": "Code Memory: 함수에 실행 (내부용)"
+      },
+      {
+        "command": "codeMemory.runEvaluation",
+        "title": "Code Memory: 평가 실행 (팀용)",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "codeMemory.openKeySettings",
+        "title": "Code Memory: AI 키 설정",
+        "icon": "$(key)"
+      },
+      {
+        "command": "codeMemory.toggleDemo",
+        "title": "Code Memory: 시연 모드 켜기 / 끄기",
+        "icon": "$(play)"
       }
     ],
     "menus": {
@@ -83,6 +98,11 @@
           "command": "codeMemory.switchMode",
           "when": "view == codeMemory.searchView",
           "group": "navigation@1"
+        },
+        {
+          "command": "codeMemory.openKeySettings",
+          "when": "view == codeMemory.searchView",
+          "group": "navigation@1.5"
         },
         {
           "command": "codeMemory.exportFeedback",
@@ -191,6 +211,30 @@
           "type": "boolean",
           "default": true,
           "description": "함수 위에 \"💾 저장 | ✦ AI에게 묻기 | 🔍 비슷한 코드\" 표시 (프로젝트 폴더 안 파일만)"
+        },
+        "codeMemory.secretScan": {
+          "type": "boolean",
+          "default": true,
+          "description": "저장 전에 API 키·비밀번호·토큰 같은 비밀값을 찾아서 가릴지 묻기 (서버로 가는 코드만 가림, 내 파일은 그대로)"
+        },
+        "codeMemory.duplicateCheck": {
+          "type": "boolean",
+          "default": true,
+          "description": "저장 직전에 같은 코드로 검색해서, 거의 같은 코드가 이미 저장돼 있으면 묻기 (LLM 호출 없음)"
+        },
+        "codeMemory.duplicateThreshold": {
+          "type": "number",
+          "default": 0.95,
+          "minimum": 0.5,
+          "maximum": 1,
+          "description": "중복으로 볼 유사도 기준 (0.5~1). 높을수록 정말 같은 코드만 잡는다"
+        },
+        "codeMemory.reviewAfterDays": {
+          "type": "integer",
+          "default": 7,
+          "minimum": 0,
+          "maximum": 365,
+          "description": "처음 화면 \"다시 볼 만한 코드\"에 띄울 기준 — 저장한 지 며칠 지난 코드인지 (0 이면 바로)"
         }
       }
     },
@@ -261,7 +305,7 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vscode-test",
-    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js",
+    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js out/test/evaluationKey.test.js",
     "vsix": "npx --yes @vscode/vsce@3 package --no-dependencies --skip-license"
   },
   "devDependencies": {
