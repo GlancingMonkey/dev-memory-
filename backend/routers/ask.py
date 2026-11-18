@@ -3,11 +3,12 @@ import logging
 import re
 from time import monotonic
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from backend.database import search_snippets
 from backend.llm import (
+    LLMKeyError,
     LLMResponseError,
     LLMTimeoutError,
     MAX_INPUT_TOKENS,
@@ -17,6 +18,7 @@ from backend.llm import (
     generate_answer,
     generate_answer_stream,
 )
+from backend.request_llm import KEY_HEADER, PROVIDER_HEADER, from_headers
 from backend.schemas.ask import (
     AskRequest,
     AskResponse,
@@ -40,6 +42,23 @@ INSUFFICIENT_ANSWER = (
 )
 
 
+class _PersonalStreamingResponse(StreamingResponse):
+    """Close the personal client on success, send failure or cancellation."""
+
+    def __init__(self, response, session):
+        super().__init__(
+            response.body_iterator, status_code=response.status_code,
+            headers=dict(response.headers), media_type=response.media_type,
+        )
+        self._session = session
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._session.close()
+
+
 def _error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(
         status_code=status_code,
@@ -52,10 +71,33 @@ def _check_deadline(deadline: float) -> None:
         raise LLMTimeoutError
 
 
-@router.post("/ask", response_model=AskResponse)
+@router.post("/ask", response_model=AskResponse, openapi_extra={"parameters": [
+    {"in": "header", "name": KEY_HEADER, "required": False,
+     "schema": {"type": "string", "format": "password"},
+     "description": "선택한 제공자의 사용자 키. 제공자 헤더와 함께 사용합니다."},
+    {"in": "header", "name": PROVIDER_HEADER, "required": False,
+     "schema": {"type": "string", "enum": ["openai", "anthropic", "google"]}},
+]})
 def ask_endpoint(
     request: AskRequest,
+    http_request: Request,
 ) -> AskResponse | StreamingResponse:
+    session = from_headers(http_request.headers)
+    try:
+        response = _ask(request, session)
+    except BaseException:
+        if session is not None:
+            session.close()
+        raise
+    if session is not None:
+        if isinstance(response, StreamingResponse):
+            return _PersonalStreamingResponse(response, session)
+        else:
+            session.close()
+    return response
+
+
+def _ask(request: AskRequest, session=None) -> AskResponse | StreamingResponse:
     question = request.q.strip()
     if not question:
         raise HTTPException(status_code=422, detail="질문을 입력해주세요.")
@@ -97,14 +139,16 @@ def ask_endpoint(
         def count_context(text: str) -> int:
             _check_deadline(deadline)
             if text not in context_counts:
-                context_counts[text] = count_context_tokens(context=text, deadline=deadline)
+                counter = session.count_context_tokens if session is not None else count_context_tokens
+                context_counts[text] = counter(context=text, deadline=deadline)
             return context_counts[text]
 
         def count_input(messages: list[dict[str, str]]) -> int:
             _check_deadline(deadline)
             key = json.dumps(messages, ensure_ascii=False, sort_keys=True)
             if key not in input_counts:
-                input_counts[key] = count_input_tokens(messages=messages, deadline=deadline)
+                counter = session.count_input_tokens if session is not None else count_input_tokens
+                input_counts[key] = counter(messages=messages, deadline=deadline)
             return input_counts[key]
         context = build_context(
             results,
@@ -145,14 +189,17 @@ def ask_endpoint(
         _check_deadline(deadline)
         if request.stream:
             return _streaming_response(
-                _stream_answer(context, messages, len(history), deadline)
+                _stream_answer(context, messages, len(history), deadline, session)
             )
-        model_answer, model_name, usage = generate_answer(
+        generate = session.generate_answer if session is not None else generate_answer
+        model_answer, model_name, usage = generate(
             messages=messages,
             deadline=deadline,
         )
     except HTTPException:
         raise
+    except LLMKeyError as error:
+        raise _key_error(error.status_code) from None
     except LLMTimeoutError:
         raise _error(
             504,
@@ -250,14 +297,15 @@ def _empty_stream():
     yield _sse_event("done", response.model_dump())
 
 
-def _stream_answer(context, messages, history_used: int, deadline: float):
+def _stream_answer(context, messages, history_used: int, deadline: float, session=None):
     yield _sse_event(
         "sources",
         {"sources": [source.to_dict() for source in context.sources]},
     )
     try:
         final = None
-        for kind, value in generate_answer_stream(messages=messages, deadline=deadline):
+        generate = session.generate_answer_stream if session is not None else generate_answer_stream
+        for kind, value in generate(messages=messages, deadline=deadline):
             if kind == "delta":
                 yield _sse_event("delta", {"text": value})
             elif kind == "complete":
@@ -273,6 +321,13 @@ def _stream_answer(context, messages, history_used: int, deadline: float):
             history_used=history_used,
         )
         yield _sse_event("done", response.model_dump())
+    except LLMKeyError as error:
+        safe_error = _key_error(error.status_code)
+        yield _sse_event("error", {
+            "status": safe_error.status_code,
+            "code": safe_error.detail["code"],
+            "detail": safe_error.detail["message"],
+        })
     except HTTPException as error:
         detail = error.detail
         if isinstance(detail, dict):
@@ -303,6 +358,14 @@ def _invalid_model_response() -> HTTPException:
         502,
         "llm_response_invalid",
         "AI 답변의 출처를 검증할 수 없습니다. 질문을 다시 실행해 주세요.",
+    )
+
+
+def _key_error(status_code: int) -> HTTPException:
+    return _error(
+        status_code,
+        "llm_key_invalid" if status_code == 401 else "llm_key_forbidden",
+        "AI 키와 해당 제공자의 모델 사용 권한을 확인해 주세요.",
     )
 
 

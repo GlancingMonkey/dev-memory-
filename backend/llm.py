@@ -29,6 +29,14 @@ class LLMServiceError(Exception):
     pass
 
 
+class LLMKeyError(LLMServiceError):
+    """Safe credential failure; never retain the provider exception or key."""
+
+    def __init__(self, status_code: int = 401):
+        self.status_code = status_code
+        super().__init__("LLM credential rejected")
+
+
 class LLMTimeoutError(Exception):
     pass
 
@@ -63,14 +71,27 @@ def _remaining(deadline: float) -> float:
     return remaining
 
 
+def _raise_provider_error(error: Exception) -> None:
+    from openai import APITimeoutError, AuthenticationError, PermissionDeniedError
+
+    if isinstance(error, APITimeoutError):
+        raise LLMTimeoutError from None
+    if isinstance(error, AuthenticationError):
+        raise LLMKeyError(401) from None
+    if isinstance(error, PermissionDeniedError):
+        raise LLMKeyError(403) from None
+    raise LLMServiceError from None
+
+
 def count_input_tokens(
     *,
     messages: list[dict[str, str]],
     deadline: float,
+    client=None,
 ) -> int:
     """Count the same message and schema shape that is sent for generation."""
     try:
-        response = _client().responses.input_tokens.count(
+        response = (client if client is not None else _client()).responses.input_tokens.count(
             model=MODEL,
             input=messages,
             reasoning={"effort": "low"},
@@ -80,18 +101,14 @@ def count_input_tokens(
     except LLMTimeoutError:
         raise
     except Exception as error:
-        from openai import APITimeoutError
-
-        if isinstance(error, APITimeoutError):
-            raise LLMTimeoutError from None
-        raise LLMServiceError from None
+        _raise_provider_error(error)
     return response.input_tokens
 
 
-def count_context_tokens(*, context: str, deadline: float) -> int:
+def count_context_tokens(*, context: str, deadline: float, client=None) -> int:
     """Count serialized source records without estimating from characters."""
     try:
-        response = _client().responses.input_tokens.count(
+        response = (client if client is not None else _client()).responses.input_tokens.count(
             model=MODEL,
             input=context,
             timeout=_remaining(deadline),
@@ -99,11 +116,7 @@ def count_context_tokens(*, context: str, deadline: float) -> int:
     except LLMTimeoutError:
         raise
     except Exception as error:
-        from openai import APITimeoutError
-
-        if isinstance(error, APITimeoutError):
-            raise LLMTimeoutError from None
-        raise LLMServiceError from None
+        _raise_provider_error(error)
     return response.input_tokens
 
 
@@ -111,10 +124,11 @@ def generate_answer(
     *,
     messages: list[dict[str, str]],
     deadline: float,
+    client=None,
 ) -> tuple[ModelAnswer, str, dict[str, int]]:
     """Generate once with retries disabled and return provider-reported usage."""
     try:
-        response = _client().responses.create(
+        response = (client if client is not None else _client()).responses.create(
             model=MODEL,
             input=messages,
             reasoning={"effort": "low"},
@@ -125,11 +139,7 @@ def generate_answer(
     except LLMTimeoutError:
         raise
     except Exception as error:
-        from openai import APITimeoutError
-
-        if isinstance(error, APITimeoutError):
-            raise LLMTimeoutError from None
-        raise LLMServiceError from None
+        _raise_provider_error(error)
 
     return _parse_completed_response(response)
 
@@ -204,6 +214,7 @@ def generate_answer_stream(
     *,
     messages: list[dict[str, str]],
     deadline: float,
+    client=None,
 ) -> Iterator[tuple[str, object]]:
     """Stream answer text deltas and finish with the validated provider result."""
     stream = None
@@ -211,7 +222,7 @@ def generate_answer_stream(
     emitted_answer = ""
     completed_response = None
     try:
-        stream = _client().responses.create(
+        stream = (client if client is not None else _client()).responses.create(
             model=MODEL,
             input=messages,
             reasoning={"effort": "low"},
@@ -256,11 +267,7 @@ def generate_answer_stream(
     except (LLMTimeoutError, LLMResponseError, LLMServiceError):
         raise
     except Exception as error:
-        from openai import APITimeoutError
-
-        if isinstance(error, APITimeoutError):
-            raise LLMTimeoutError from None
-        raise LLMServiceError from None
+        _raise_provider_error(error)
     finally:
         if stream is not None and hasattr(stream, "close"):
             try:

@@ -319,7 +319,7 @@ Backend를 더 사용하지 않으면 실행 터미널에서 Ctrl+C로 종료한
 
 POST /ask는 기존 E5·DB 검색 결과를 참고 자료로 구성하고, 명시적인 AI 질문에만 LLM을 호출한다.
 저장·일반 검색·GET /filters는 LLM을 호출하지 않는다.
-실제 계수·생성에는 .env의 OPENAI_API_KEY가 필요하다. .env.example에는 이름만 있으며 키를 Git에 넣지 않는다.
+서버 기본 모드의 실제 계수·생성에는 .env의 OPENAI_API_KEY가 필요하다. Extension의 내 키 모드는 POST /ask의 두 헤더를 통해 OpenAI·Claude·Gemini 키를 요청마다 전달한다. 키를 Git에 넣지 않는다. [사용자 키 연결·검증 안내](PERSONAL_LLM_KEYS.md)를 따른다.
 
 현재 /ask는 전체 DB를 검색하고 /search의 project·language 조건을 받지 않는다.
 JSON과 SSE의 완료·오류 규칙은 [공식 계약](../API_CONTRACT.md)을 따른다.

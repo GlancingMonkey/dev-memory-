@@ -59,6 +59,8 @@ uv run --locked uvicorn backend.main:app --host 0.0.0.0 --port 8000
 
 Windows에서 [서버 상태](http://127.0.0.1:8000/health)와 [API 문서](http://127.0.0.1:8000/docs)를 확인합니다. 포트 전달 주소가 다르면 VS Code **포트** 탭의 주소를 사용합니다. /health 정상 여부와 DB·모델 준비 여부는 별도로 확인합니다.
 
+사용자 OpenAI·Claude·Gemini 키를 연결할 때는 [개인 AI 키 안내](docs/PERSONAL_LLM_KEYS.md)를 확인합니다. 키는 Extension SecretStorage에서 선택하고 AI 요청에만 전달합니다.
+
 ## 구현 상태와 근거
 
 | 범위 | 상태 | 확인 자료 |

@@ -72,3 +72,9 @@ npm.cmd run compile
 - 변경한 시험 설정을 복원했는지 적고 비밀값은 제외합니다.
 
 [최종 통합 기록](INTEGRATION_TEST_2026-11-05.md) · [문서 목차](README.md)
+
+## 사용자 AI 키 연결
+
+[test_request_llm.py](../tests/test_request_llm.py)는 제공자별 계수·생성 payload, 실제 응답 필드의 usage 변환, 키 격리·인증 오류·자동 재시도 없음을 모의 HTTP/SDK로 확인합니다.
+[test_personal_key_api.py](../tests/test_personal_key_api.py)는 세 제공자 JSON·SSE·401/403·출처·연결 종료를 검사합니다. 합성 시험 키만 사용하며 실제 과금 호출을 하지 않습니다.
+실제 Extension PR #53의 키 설정·계정 접근 확인은 [키 연결 가이드](PERSONAL_LLM_KEYS.md)의 순서를 따릅니다.
