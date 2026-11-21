@@ -120,6 +120,7 @@ function navigationFixture(fileText: string) {
     SymbolKind: { Function: 11, Method: 5, Constructor: 8 },
     workspace: {
       workspaceFolders: [],
+      getConfiguration: () => ({ get: (name: string, fallback: unknown) => name === 'mock' ? false : name === 'apiUrl' ? 'http://ui.test' : fallback }),
       onDidChangeConfiguration: () => ({ dispose() {} }),
       fs: { readFile: async () => Buffer.from(fileText) },
       openTextDocument: async (uri: Uri) => {
@@ -149,14 +150,18 @@ function navigationFixture(fileText: string) {
   }
   const locations = new ProjectLocations(new MemoryState(), () => []);
   sidebar.useProjectLocations(locations);
-  const provider = new sidebar.SearchViewProvider(new MemoryState(), new MemoryState(), {} as Vscode.SecretStorage);
+  const state = new MemoryState();
+  const provider = new sidebar.SearchViewProvider(state, new MemoryState(), {} as Vscode.SecretStorage);
   let receive: ((message: unknown) => Promise<void>) | undefined;
+  let dispose = () => {};
+  const messages: { type?: string; reqId?: number }[] = [];
   const webview = {
-    html: '', cspSource: 'vscode-webview:', options: {}, postMessage: async () => true,
+    html: '', cspSource: 'vscode-webview:', options: {},
+    postMessage: async (message: { type?: string; reqId?: number }) => { messages.push(message); return true; },
     onDidReceiveMessage: (callback: (message: unknown) => Promise<void>) => { receive = callback; },
   };
-  provider.resolveWebviewView({ webview, onDidDispose: () => ({ dispose() {} }) } as unknown as Vscode.WebviewView);
-  return { provider, locations, opened, selections, html: webview.html,
+  provider.resolveWebviewView({ webview, onDidDispose: (callback: () => void) => { dispose = callback; } } as unknown as Vscode.WebviewView);
+  return { provider, locations, opened, selections, state, messages, html: webview.html, dispose: () => dispose(),
     receive: (message: unknown) => { assert.ok(receive); return receive(message); } };
 }
 
@@ -187,5 +192,57 @@ suite('원본 이동 연결 — 실제 확장 핸들러', () => {
     const scripts = [...f.html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)];
     assert.ok(scripts.length > 0);
     for (const script of scripts) { assert.doesNotThrow(() => new Script(script[1])); }
+  });
+});
+
+async function withPendingSearches(run: (f: ReturnType<typeof navigationFixture>, requests: {
+  resolve: (response: Response) => void; reject: (error: Error) => void;
+}[]) => Promise<void>) {
+  const original = globalThis.fetch;
+  const requests: { resolve: (response: Response) => void; reject: (error: Error) => void }[] = [];
+  globalThis.fetch = (() => new Promise<Response>((resolve, reject) => { requests.push({ resolve, reject }); })) as typeof fetch;
+  try { await run(navigationFixture(source.code), requests); }
+  finally { globalThis.fetch = original; }
+}
+
+async function waitForRequests(requests: unknown[], count: number) {
+  for (let i = 0; i < 100 && requests.length < count; i++) { await new Promise<void>((resolve) => setImmediate(resolve)); }
+  assert.strictEqual(requests.length, count);
+}
+
+function searchResponse() { return new Response(JSON.stringify({ results: [source], filters: { project: null, language: null } }), { status: 200 }); }
+
+suite('검색 응답 순서 — 화면과 재로드 상태', () => {
+  test('늦은 이전 응답은 최신 검색의 저장 상태를 덮어쓰지 않는다', async () => {
+    await withPendingSearches(async (f, requests) => {
+      const first = f.receive({ type: 'search', query: 'first', reqId: 1 });
+      await waitForRequests(requests, 1);
+      const second = f.receive({ type: 'search', query: 'second', reqId: 2 });
+      await waitForRequests(requests, 2);
+      requests[1].resolve(searchResponse()); await second;
+      requests[0].resolve(searchResponse()); await first;
+      assert.strictEqual(f.state.get<{ query: string }>('codeMemory.lastSearch')?.query, 'second');
+    });
+  });
+
+  test('이전 요청의 늦은 오류를 최신 검색 화면에 보내지 않는다', async () => {
+    await withPendingSearches(async (f, requests) => {
+      const first = f.receive({ type: 'search', query: 'first', reqId: 1 });
+      await waitForRequests(requests, 1);
+      const second = f.receive({ type: 'search', query: 'second', reqId: 2 });
+      await waitForRequests(requests, 2);
+      requests[1].resolve(searchResponse()); await second;
+      requests[0].reject(new Error('old request failed')); await first;
+      assert.ok(!f.messages.some((message) => message.type === 'error' && message.reqId === 1));
+    });
+  });
+
+  test('뷰를 닫은 뒤 끝난 요청은 복원할 검색 상태를 덮어쓰지 않는다', async () => {
+    await withPendingSearches(async (f, requests) => {
+      const pending = f.receive({ type: 'search', query: 'old view', reqId: 1 });
+      await waitForRequests(requests, 1);
+      f.dispose(); requests[0].resolve(searchResponse()); await pending;
+      assert.strictEqual(f.state.get('codeMemory.lastSearch'), undefined);
+    });
   });
 });

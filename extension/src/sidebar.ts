@@ -683,6 +683,7 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
   private ready = false;                       // 웹페이지 스크립트가 메시지를 받을 준비가 됐는지
   private pendingQuery: string | undefined;    // 패널이 열리기 전에 들어온 "이걸로 검색해줘"
   private pendingFocus = false;                // 패널이 열리기 전에 들어온 "검색창에 커서"
+  private searchGeneration = 0;
 
   private pendingPrefill: { text: string; selStart: number; selEnd: number } | undefined;   // "이 코드에 대해 묻기"
   private readonly askCtrls = new Map<number, AbortController>();   // 생성 중인 질문 → 취소용
@@ -1015,6 +1016,7 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
+    this.searchGeneration++;
     this.view = view;
     this.ready = false;
     view.webview.options = { enableScripts: true };
@@ -1040,8 +1042,11 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
     });
     view.onDidDispose(() => {
       configListener.dispose();
-      this.view = undefined;
-      this.ready = false;
+      if (this.view === view) {
+        this.searchGeneration++;
+        this.view = undefined;
+        this.ready = false;
+      }
     });
 
     // 웹페이지 → 확장 본체 메시지 받기
@@ -1063,18 +1068,25 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'search': {
+          const generation = ++this.searchGeneration;
           const filter = normalizeFilter(msg.filter);
-          view.webview.postMessage({ type: 'recent', items: await this.pushRecent(msg.query, false) });
+          await this.pushRecent(msg.query, false);
+          if (generation !== this.searchGeneration) { break; }
+          view.webview.postMessage({ type: 'recent', items: this.recentView(this.readRecent()) });
           try {
             if (filter.project.length > FILTER_MAX_LENGTH || filter.language.length > FILTER_MAX_LENGTH) {
               throw new SearchError('검색 조건을 확인하세요', `프로젝트·언어 이름은 ${FILTER_MAX_LENGTH}자까지예요.`, 'server');
             }
             const { results, check } = await searchSnippets(msg.query, filter);
+            if (generation !== this.searchGeneration) { break; }
+            const localResults = await withLocalStatus(results);
+            if (generation !== this.searchGeneration) { break; }
             view.webview.postMessage({
-              type: 'results', reqId: msg.reqId, query: msg.query, filter, check, results: await withLocalStatus(results),
+              type: 'results', reqId: msg.reqId, query: msg.query, filter, check, results: localResults,
             });
             await this.state.update(STATE_KEY, { query: msg.query, results, filter, check } satisfies SavedSearch);
           } catch (err) {
+            if (generation !== this.searchGeneration) { break; }
             const title = err instanceof SearchError ? err.title : '검색 실패';
             const detail = err instanceof SearchError ? err.detail : err instanceof Error ? err.message : String(err);
             const kind = err instanceof SearchError ? err.kind : 'server';
@@ -2720,6 +2732,7 @@ function getHtml(webview: vscode.Webview): string {
 
   // G. 오류 — 아이콘 + 다시 시도
   function showError(title, detail, kind) {
+    if (!input.value.trim()) { input.value = lastQuery; updateMode(); }
     current = null;
     tools.hidden = true;
     fWarn.hidden = true;
