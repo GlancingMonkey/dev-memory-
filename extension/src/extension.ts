@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-import { COMPARE_SCHEME, compareDocs, findDuplicate, SaveRecord, SearchViewProvider } from './sidebar';
+import { COMPARE_SCHEME, compareDocs, findDuplicate, SaveRecord, SearchViewProvider, useProjectLocations } from './sidebar';
 import { EvaluationRunner } from './evaluation';
+import { ProjectLocations } from './projectLocations';
 import {
   adjustEndLine, clamp, EmbeddingStatus, findFunctionNameByRegex, formatSeconds, maskSecrets, parseSaveResponse, pickSymbol, SaveUnconfirmedError,
   scanSecrets, SimpleSymbol,
@@ -337,8 +338,16 @@ class FunctionLens implements vscode.CodeLensProvider {
   }
 }
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
+  const locations = new ProjectLocations(context.globalState,
+    () => (vscode.workspace.workspaceFolders ?? []).map((folder) => ({ name: folder.name, uri: folder.uri.toString() })),
+    `codeMemory.projectLocations.v1.${vscode.env.remoteName ?? 'local'}`);
+  useProjectLocations(locations);
+  await locations.rememberOpen();
   const searchProvider = new SearchViewProvider(context.workspaceState, context.globalState, context.secrets);
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    void locations.rememberOpen().then(() => searchProvider.sourceLocationsChanged());
+  }));
 
   const command = vscode.commands.registerCommand('codeMemory.saveSnippet', async () => {
     if (saving) {
@@ -721,6 +730,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(vscode.commands.registerCommand('codeMemory.runEvaluation', () => evaluation.start()));
   context.subscriptions.push(askAboutSelection, exportFeedback,
     vscode.commands.registerCommand('codeMemory.openKeySettings', () => searchProvider.openKeySettings()),
+    vscode.commands.registerCommand('codeMemory.connectSourceProject', () => searchProvider.connectSourceProject()),
     vscode.commands.registerCommand('codeMemory.toggleDemo', () => searchProvider.toggleDemo()));
 
   // 함수 위 글자(CodeLens) → 그 함수를 선택하고 원래 명령 실행

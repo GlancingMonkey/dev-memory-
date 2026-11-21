@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { ProjectLocations, relativeSourceParts } from './projectLocations';
 import {
   addUsage, answerToMarkdown, askCacheKey, AskError, askErrorFor, AskResponse, AskSource, AskTurn, buildAskRequest, buildSearchUrl,
   canSendKey, checkAppliedFilter, clamp, compareSource, guessProvider, LLM_KEY_HEADER, LLM_PROVIDER_HEADER, LLM_PROVIDERS,
@@ -372,13 +373,22 @@ async function readAskStream(body: ReadableStream<Uint8Array>, opts: AskOptions)
 // ─────────────────────────────────────────────
 // 웹페이지가 부탁할 수 있는 일들
 // ─────────────────────────────────────────────
+let projectLocations: ProjectLocations | undefined;
+export function useProjectLocations(locations: ProjectLocations): void {
+  projectLocations = locations;
+}
+
 function resolveUri(r: SearchResult): vscode.Uri | null {
   if (r.absolute_path) {
     return vscode.Uri.file(r.absolute_path);
   }
-  // 절대 경로가 없으면: 지금 열린 폴더 중 이름이 같은 프로젝트에서 상대 경로로 찾기
+  const parts = relativeSourceParts(r.file_path);
+  if (!parts?.length) { return null; }
+  const remembered = projectLocations?.rootFor(r.project_name);
+  if (remembered) { return vscode.Uri.joinPath(vscode.Uri.parse(remembered), ...parts); }
+  // 확장 초기화 전에는 현재 워크스페이스만 확인한다.
   const folder = vscode.workspace.workspaceFolders?.find((f) => f.name === r.project_name);
-  return folder ? vscode.Uri.joinPath(folder.uri, r.file_path) : null;
+  return folder && !projectLocations ? vscode.Uri.joinPath(folder.uri, ...parts) : null;
 }
 
 async function openSource(r: SearchResult): Promise<void> {
@@ -455,6 +465,8 @@ type FromWebview =
   | { type: 'search'; query: string; reqId?: number; filter?: Partial<SearchFilter> }
   | { type: 'loadFilters' }
   | { type: 'open'; result: SearchResult }
+  | { type: 'connectSource'; result: SearchResult }
+  | { type: 'refreshLocal'; results: SearchResult[] }
   | { type: 'insert'; code: string }
   | { type: 'copy'; code: string }
   | { type: 'ready' }
@@ -684,6 +696,57 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
     private readonly global: vscode.Memento,
     private readonly secrets: vscode.SecretStorage,
   ) {}
+
+  public sourceLocationsChanged(): void {
+    if (this.view && this.ready) { this.view.webview.postMessage({ type: 'sourceLocationsChanged' }); }
+  }
+
+  public async connectSourceProject(result?: SearchResult): Promise<void> {
+    if (!projectLocations) { return; }
+    const name = result?.project_name ?? await vscode.window.showInputBox({
+      title: '원본 프로젝트 위치 연결',
+      prompt: '검색 결과에 표시된 프로젝트 이름',
+      value: vscode.workspace.workspaceFolders?.[0]?.name,
+      validateInput: (value) => value.trim() ? undefined : '프로젝트 이름을 입력하세요.',
+    });
+    if (!name) { return; }
+    const parts = result ? relativeSourceParts(result.file_path) : undefined;
+    if (result && !parts?.length) {
+      vscode.window.showWarningMessage('올바른 상대 파일 경로가 아닙니다.');
+      return;
+    }
+    const selected = await vscode.window.showOpenDialog({
+      title: `${name} 원본 프로젝트 폴더를 선택하세요`,
+      openLabel: '이 위치 기억하기', canSelectFolders: true, canSelectFiles: false, canSelectMany: false,
+    });
+    const root = selected?.[0];
+    if (!root) { return; }
+    let target = result;
+    if (result && parts) {
+      try {
+        const uri = vscode.Uri.joinPath(root, ...parts);
+        const text = new TextDecoder('utf-8').decode(await vscode.workspace.fs.readFile(uri));
+        const check = compareSource(result.code, text, result.start_line, result.end_line);
+        if (check.state === 'moved' && check.start !== undefined && check.end !== undefined) {
+          target = { ...result, start_line: check.start, end_line: check.end };
+        }
+        if (check.state === 'changed') {
+          const choice = await vscode.window.showWarningMessage(
+            '선택한 파일의 코드가 저장본과 다릅니다.',
+            { modal: true, detail: `${uri.fsPath}\n이 프로젝트 위치로 연결할까요?` }, '이 위치로 연결',
+          );
+          if (choice !== '이 위치로 연결') { return; }
+        }
+      } catch {
+        vscode.window.showWarningMessage(`이 폴더에서 ${result.file_path} 파일을 찾거나 읽을 수 없습니다.`);
+        return;
+      }
+    }
+    await projectLocations.connect(name, root.toString());
+    this.sourceLocationsChanged();
+    if (target) { await openSource(target); }
+    else { vscode.window.showInformationMessage(`${name}의 원본 위치를 기억했습니다. 프로젝트를 닫아도 원본을 열 수 있습니다.`); }
+  }
 
   // ── 사용자 AI 키
   private readonly keyEmitter = new vscode.EventEmitter<void>();
@@ -1136,6 +1199,14 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
         }
         case 'open': {
           await openSource(msg.result);
+          break;
+        }
+        case 'connectSource': {
+          await this.connectSourceProject(msg.result);
+          break;
+        }
+        case 'refreshLocal': {
+          view.webview.postMessage({ type: 'localStatus', results: await withLocalStatus(msg.results) });
           break;
         }
         case 'insert': {
@@ -2064,6 +2135,34 @@ function getHtml(webview: vscode.Webview): string {
         lastQuery = msg.query;
         setResults(msg.query, msg.results, true, msg.filter, msg.check);
         break;
+      case 'sourceLocationsChanged': {
+        const rows = (current ? current.results : []).concat(currentAnswer ? currentAnswer.r.sources : []);
+        if (rows.length) { vscode.postMessage({ type: 'refreshLocal', results: rows }); }
+        break;
+      }
+      case 'localStatus': {
+        const updated = msg.results || [];
+        const patch = function (row) {
+          const found = updated.find(function (item) {
+            return item.id === row.id && item.project_name === row.project_name && item.file_path === row.file_path
+              && item.code === row.code && item.start_line === row.start_line && item.end_line === row.end_line;
+          });
+          return found ? Object.assign({}, row, { local: found.local, source: found.source, moved_start: found.moved_start, moved_end: found.moved_end }) : row;
+        };
+        if (current) { current.results = current.results.map(patch); renderResults(); }
+        if (currentAnswer && !asking) {
+          currentAnswer.r.sources = currentAnswer.r.sources.map(patch);
+          answerBox.querySelectorAll('.card[data-cite]').forEach(function (old, index) {
+            const source = currentAnswer.r.sources.find(function (item) { return item.citation_id === old.dataset.cite; });
+            if (source) {
+              const replacement = card(Object.assign({ rank: source.citation_id }, source), index);
+              replacement.dataset.cite = source.citation_id;
+              old.replaceWith(replacement);
+            }
+          });
+        }
+        break;
+      }
       case 'results':
         if (msg.reqId !== undefined && msg.reqId !== searchSeq) { break; }   // 범위를 바꾸기 전에 보낸 검색의 응답은 버린다
         setSearching(false);
@@ -2644,8 +2743,8 @@ function getHtml(webview: vscode.Webview): string {
     const range = r.start_line === r.end_line ? String(r.start_line) : r.start_line + '–' + r.end_line;
     const canOpen = r.local !== 'no_folder' && r.local !== 'missing';
     const why = r.local === 'no_folder'
-      ? '이 PC 에서 ' + (r.project_name || '(프로젝트 없음)') + ' 폴더가 열려 있지 않습니다'
-      : '열린 프로젝트 폴더에 이 파일이 없습니다';
+      ? '이 PC의 원본 프로젝트 위치를 한 번 연결하세요. 이후에는 프로젝트를 닫아도 열 수 있습니다.'
+      : '기억한 위치에 파일이 없습니다. 옮긴 프로젝트 위치를 다시 연결할 수 있습니다.';
     if (r.source === 'moved' && r.moved_start) {
       const nr = r.moved_start === r.moved_end ? String(r.moved_start) : r.moved_start + '–' + r.moved_end;
       return { where: nr + '줄', oldWhere: r.file_path + ' : ' + range, canOpen: canOpen, why: why };
@@ -2718,8 +2817,10 @@ function getHtml(webview: vscode.Webview): string {
         }
       }
     } else {
-      const tag = el('span', 'tag', '원본 없음');
+      const tag = el('button', 'tag', '원본 위치 연결');
+      tag.type = 'button';
       tag.title = info.why;
+      tag.addEventListener('click', function () { openResult(r); });
       loc.append(el('span', 'loc-off', info.where), tag);
     }
 
@@ -2754,14 +2855,14 @@ function getHtml(webview: vscode.Webview): string {
     }
 
     const acts = el('div', 'acts');
-    const openBtn = action('open', '원본 열기', function () { openResult(r); });
-    if (!info.canOpen) { openBtn.disabled = true; openBtn.title = info.why; }
+    const openBtn = action('open', info.canOpen ? '원본 열기' : '위치 연결', function () { openResult(r); });
+    if (!info.canOpen) { openBtn.title = info.why; }
     const copyBtn = action('copy', '복사', function () { copyCode(r, copyBtn); });
     acts.append(openBtn, action('insert', '삽입', function () { insertCode(r); }), copyBtn,
       action('diff', '비교', function () { compareResult(r); }));
     c.append(acts);
 
-    keyboard(c, r, i, info.canOpen, function () { copyBtn.click(); });
+    keyboard(c, r, i, true, function () { copyBtn.click(); });
     return c;
   }
 
@@ -2775,8 +2876,8 @@ function getHtml(webview: vscode.Webview): string {
     if (r.source === 'changed') { c.append(srcTag('w', '바뀜', '저장한 코드와 지금 파일 내용이 달라요')); }
     c.append(simEl(r));
     c.title = (info.canOpen ? '눌러서 원본 열기' : info.why) + ' · ↑↓ 이동 · C 복사 · I 삽입 · D 비교 · Esc 검색창';
-    c.addEventListener('click', function () { if (info.canOpen) { openResult(r); } });
-    keyboard(c, r, i, info.canOpen, function () { copyCode(r, null); showToast({ status: 'copy', function_name: nameOf(r) }); });
+    c.addEventListener('click', function () { openResult(r); });
+    keyboard(c, r, i, true, function () { copyCode(r, null); showToast({ status: 'copy', function_name: nameOf(r) }); });
     return c;
   }
 
@@ -2818,6 +2919,7 @@ function getHtml(webview: vscode.Webview): string {
 
   // 위치가 옮겨진 원본은 새 위치로 연다
   function openResult(r) {
+    if (!locInfo(r).canOpen) { vscode.postMessage({ type: 'connectSource', result: r }); return; }
     markSeen(r.function_name, r.file_path);
     const target = r.source === 'moved' && r.moved_start ? Object.assign({}, r, { start_line: r.moved_start, end_line: r.moved_end }) : r;
     vscode.postMessage({ type: 'open', result: target });

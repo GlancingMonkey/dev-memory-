@@ -73,6 +73,10 @@
         "command": "codeMemory.toggleDemo",
         "title": "Code Memory: 시연 모드 켜기 / 끄기",
         "icon": "$(play)"
+      },
+      {
+        "command": "codeMemory.connectSourceProject",
+        "title": "Code Memory: 원본 프로젝트 위치 연결"
       }
     ],
     "menus": {
@@ -305,7 +309,7 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vscode-test",
-    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js out/test/evaluationKey.test.js",
+    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js out/test/evaluationKey.test.js out/test/projectLocations.test.js",
     "vsix": "npx --yes @vscode/vsce@3 package --no-dependencies --skip-license"
   },
   "devDependencies": {
