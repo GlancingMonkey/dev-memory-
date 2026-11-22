@@ -1,0 +1,119 @@
+{
+  "query_id": "q24",
+  "question": "Kubernetes 파드를 자동 확장하는 저장된 코드를 설명해줘",
+  "expected_ids": [],
+  "rank": null,
+  "seconds": 0.08415736599999946,
+  "results": [
+    {
+      "id": 17,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "buildAskRequest",
+      "start_line": 379,
+      "end_line": 393,
+      "code": "export const HISTORY_SEND_MAX = 2;          // 서버로 보내는 이전 대화 수\nconst HISTORY_ANSWER_MAX = 1500;            // 이전 답변은 앞부분만 (요청이 너무 커지지 않게)\n\n// POST /ask 요청 본문. history 는 있을 때만, stream 은 true 일 때만 넣는다 (예전 서버와 그대로 호환)\nexport function buildAskRequest(q: string, limit: number, history: AskTurn[] = [], stream = false): Record<string, unknown> {\n  const body: Record<string, unknown> = { q, limit };\n  const recent = history.slice(-HISTORY_SEND_MAX).map((h) => ({ q: h.q, answer: h.answer.slice(0, HISTORY_ANSWER_MAX) }));\n  if (recent.length) {\n    body.history = recent;\n  }\n  if (stream) {\n    body.stream = true;\n  }\n  return body;\n}",
+      "score": 0.8363065914742301
+    },
+    {
+      "id": 15,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "askCacheKey",
+      "start_line": 434,
+      "end_line": 436,
+      "code": "export function askCacheKey(q: string): string {\n  return q.trim().replace(/[?？\\s]+$/, '').replace(/\\s+/g, ' ').toLowerCase();\n}",
+      "score": 0.7955982928754991
+    },
+    {
+      "id": 1,
+      "project_name": "mvp-save-test",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "add",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def add(a, b):\r\n    return a + b",
+      "score": 0.7903763305692335
+    },
+    {
+      "id": 13,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "reindent",
+      "start_line": 100,
+      "end_line": 113,
+      "code": "export function reindent(code: string, prefix: string, eol: string): string {\n  const lines = code.replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');\n  const widths = lines.filter((l) => l.trim().length > 0).map((l) => l.length - l.trimStart().length);\n  const common = widths.length ? Math.min(...widths) : 0;\n  return lines\n    .map((l, i) => {\n      const body = l.trim().length === 0 ? '' : l.slice(common);\n      if (i === 0 || body === '') {\n        return body;\n      }\n      return prefix + body;\n    })\n    .join(eol);\n}",
+      "score": 0.780131664260433
+    },
+    {
+      "id": 4,
+      "project_name": "backend-api-regression",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "multiply",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def multiply(a, b):\n    return a * b",
+      "score": 0.7706718258848515
+    },
+    {
+      "id": 10,
+      "project_name": "capstone-rag",
+      "file_path": "rag/context.py",
+      "language": "python",
+      "function_name": "render_context",
+      "start_line": 153,
+      "end_line": 162,
+      "code": "def render_context(sources: Sequence[ContextSource]) -> str:\n    \"\"\"Encode all fields without changing code line endings or indentation.\"\"\"\n    if not sources:\n        return \"\"\n    return json.dumps(\n        {\"sources\": [source.to_dict() for source in sources]},\n        ensure_ascii=False,\n        allow_nan=False,\n        indent=2,\n    )",
+      "score": 0.7629690680233562
+    },
+    {
+      "id": 12,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "adjustEndLine",
+      "start_line": 90,
+      "end_line": 95,
+      "code": "export function adjustEndLine(startLine: number, endLine: number, endCharacter: number): number {\n  if (endCharacter === 0 && endLine > startLine) {\n    return endLine - 1;\n  }\n  return endLine;\n}",
+      "score": 0.7627690121210853
+    },
+    {
+      "id": 9,
+      "project_name": "capstone-rag",
+      "file_path": "backend/llm.py",
+      "language": "python",
+      "function_name": "_remaining",
+      "start_line": 59,
+      "end_line": 63,
+      "code": "def _remaining(deadline: float) -> float:\n    remaining = deadline - monotonic()\n    if remaining <= 0:\n        raise LLMTimeoutError\n    return remaining",
+      "score": 0.7611874911338112
+    },
+    {
+      "id": 6,
+      "project_name": "mvp-auto-test-1104",
+      "file_path": "safe_divide.py",
+      "language": "python",
+      "function_name": "safe_divide",
+      "start_line": 1,
+      "end_line": 4,
+      "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+      "score": 0.7608142780286988
+    },
+    {
+      "id": 8,
+      "project_name": "mvp-auto-test-1104",
+      "file_path": "safe_divide.py",
+      "language": "python",
+      "function_name": "safe_divide",
+      "start_line": 1,
+      "end_line": 4,
+      "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+      "score": 0.7608142780286988
+    }
+  ]
+}

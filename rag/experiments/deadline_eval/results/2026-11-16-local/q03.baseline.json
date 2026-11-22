@@ -1,0 +1,197 @@
+{
+  "state": "finished",
+  "query_id": "q03",
+  "mode": "baseline",
+  "question": "사용자들을 나이 오름차순으로 정렬하는 코드",
+  "expected_status": "answered",
+  "expected_summary": "age 값을 기준으로 사용자 목록을 오름차순 정렬한 새 목록을 반환한다.",
+  "http_status": 200,
+  "response": {
+    "status": "answered",
+    "answer": "`sort_users` 함수가 사용자의 `age` 값을 기준으로 오름차순 정렬합니다. 원본을 변경하지 않고 정렬된 새 리스트를 반환합니다. [S1]\n\n```python\ndef sort_users(users):\n    return sorted(users, key=lambda user: user[\"age\"])\n```",
+    "sources": [
+      {
+        "id": 3,
+        "project_name": "mvp-save-test",
+        "file_path": "sort_users.py",
+        "language": "python",
+        "function_name": "sort_users",
+        "start_line": 1,
+        "end_line": 2,
+        "code": "def sort_users(users):\n    return sorted(users, key=lambda user: user[\"age\"])",
+        "score": 0.8808571958797339,
+        "citation_id": "S1"
+      }
+    ],
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 2177,
+      "output_tokens": 93,
+      "total_tokens": 2270
+    },
+    "history_used": 0
+  },
+  "api_seconds": 4.664903860000777,
+  "stage_seconds": {
+    "embedding": 0.04697162199954619,
+    "database_search": 0.015627810998921632,
+    "reference_count": 0.3710742659986863,
+    "input_count": 0.7207077469993237,
+    "generation": 3.5077035579997755
+  },
+  "token_count_calls": {
+    "reference": 1,
+    "input": 1
+  },
+  "candidate_rows": [
+    {
+      "id": 3,
+      "project_name": "mvp-save-test",
+      "file_path": "sort_users.py",
+      "language": "python",
+      "function_name": "sort_users",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def sort_users(users):\n    return sorted(users, key=lambda user: user[\"age\"])",
+      "score": 0.8808571958797339
+    },
+    {
+      "id": 5,
+      "project_name": "mvp-save-test",
+      "file_path": "sort_users.py",
+      "language": "python",
+      "function_name": "sort_users",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def sort_users(users):\r\n    return sorted(users, key=lambda user: user[\"age\"])",
+      "score": 0.8808571958797339
+    },
+    {
+      "id": 17,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "buildAskRequest",
+      "start_line": 379,
+      "end_line": 393,
+      "code": "export const HISTORY_SEND_MAX = 2;          // 서버로 보내는 이전 대화 수\nconst HISTORY_ANSWER_MAX = 1500;            // 이전 답변은 앞부분만 (요청이 너무 커지지 않게)\n\n// POST /ask 요청 본문. history 는 있을 때만, stream 은 true 일 때만 넣는다 (예전 서버와 그대로 호환)\nexport function buildAskRequest(q: string, limit: number, history: AskTurn[] = [], stream = false): Record<string, unknown> {\n  const body: Record<string, unknown> = { q, limit };\n  const recent = history.slice(-HISTORY_SEND_MAX).map((h) => ({ q: h.q, answer: h.answer.slice(0, HISTORY_ANSWER_MAX) }));\n  if (recent.length) {\n    body.history = recent;\n  }\n  if (stream) {\n    body.stream = true;\n  }\n  return body;\n}",
+      "score": 0.8406740427017212
+    },
+    {
+      "id": 12,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "adjustEndLine",
+      "start_line": 90,
+      "end_line": 95,
+      "code": "export function adjustEndLine(startLine: number, endLine: number, endCharacter: number): number {\n  if (endCharacter === 0 && endLine > startLine) {\n    return endLine - 1;\n  }\n  return endLine;\n}",
+      "score": 0.8039481043815613
+    },
+    {
+      "id": 15,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "askCacheKey",
+      "start_line": 434,
+      "end_line": 436,
+      "code": "export function askCacheKey(q: string): string {\n  return q.trim().replace(/[?？\\s]+$/, '').replace(/\\s+/g, ' ').toLowerCase();\n}",
+      "score": 0.8032917976379395
+    },
+    {
+      "id": 13,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "reindent",
+      "start_line": 100,
+      "end_line": 113,
+      "code": "export function reindent(code: string, prefix: string, eol: string): string {\n  const lines = code.replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');\n  const widths = lines.filter((l) => l.trim().length > 0).map((l) => l.length - l.trimStart().length);\n  const common = widths.length ? Math.min(...widths) : 0;\n  return lines\n    .map((l, i) => {\n      const body = l.trim().length === 0 ? '' : l.slice(common);\n      if (i === 0 || body === '') {\n        return body;\n      }\n      return prefix + body;\n    })\n    .join(eol);\n}",
+      "score": 0.8018971681594849
+    },
+    {
+      "id": 16,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "clamp",
+      "start_line": 495,
+      "end_line": 498,
+      "code": "export function clamp(value: unknown, min: number, max: number, fallback: number): number {\n  const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback;\n  return Math.min(max, Math.max(min, n));\n}",
+      "score": 0.7876578804152575
+    },
+    {
+      "id": 4,
+      "project_name": "backend-api-regression",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "multiply",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def multiply(a, b):\n    return a * b",
+      "score": 0.7870472200484755
+    },
+    {
+      "id": 14,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "extractCitations",
+      "start_line": 229,
+      "end_line": 237,
+      "code": "export function extractCitations(answer: string): string[] {\n  const seen: string[] = [];\n  for (const m of answer.matchAll(/\\[(S\\d+)\\]/g)) {\n    if (!seen.includes(m[1])) {\n      seen.push(m[1]);\n    }\n  }\n  return seen;\n}",
+      "score": 0.7868579626083374
+    },
+    {
+      "id": 6,
+      "project_name": "mvp-auto-test-1104",
+      "file_path": "safe_divide.py",
+      "language": "python",
+      "function_name": "safe_divide",
+      "start_line": 1,
+      "end_line": 4,
+      "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+      "score": 0.7865176200866699
+    }
+  ],
+  "selected_ids": [
+    3,
+    5,
+    17,
+    12,
+    15,
+    13,
+    16,
+    4,
+    14,
+    6
+  ],
+  "exclusions": [],
+  "reference_tokens": 1670,
+  "full_input_tokens": 2177,
+  "generation_called": true,
+  "provider_result": {
+    "answer": {
+      "status": "answered",
+      "answer": "`sort_users` 함수가 사용자의 `age` 값을 기준으로 오름차순 정렬합니다. 원본을 변경하지 않고 정렬된 새 리스트를 반환합니다. [S1]\n\n```python\ndef sort_users(users):\n    return sorted(users, key=lambda user: user[\"age\"])\n```",
+      "citation_ids": [
+        "S1"
+      ]
+    },
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 2177,
+      "output_tokens": 93,
+      "total_tokens": 2270
+    }
+  },
+  "source_fields_match_database": true,
+  "quality_review": null,
+  "expected_ids": [
+    3,
+    5
+  ],
+  "expected_source_hit": true,
+  "same_retrieved_candidates": true
+}

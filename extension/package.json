@@ -1,0 +1,331 @@
+{
+  "name": "code-memory",
+  "displayName": "Code Memory",
+  "description": "VS Code에서 선택한 코드를 저장하고, 자연어로 다시 찾아 쓰는 확장 (dev-memory 캡스톤)",
+  "publisher": "dev-memory-team",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GlancingMonkey/dev-memory-.git",
+    "directory": "extension"
+  },
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.138.0"
+  },
+  "categories": [
+    "Snippets",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codeMemory.saveSnippet",
+        "title": "Code Memory: 💾 코드 저장 (선택 또는 커서가 있는 함수)"
+      },
+      {
+        "command": "codeMemory.focusSearch",
+        "title": "Code Memory: 검색창 열기",
+        "icon": "$(search)"
+      },
+      {
+        "command": "codeMemory.switchMode",
+        "title": "Code Memory: 메뉴 · 모드 바꾸기 (mock / 실제 서버)",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "codeMemory.findSimilar",
+        "title": "Code Memory: 🔍 비슷한 코드 찾기"
+      },
+      {
+        "command": "codeMemory.openWalkthrough",
+        "title": "Code Memory: 시작하기 안내",
+        "icon": "$(question)"
+      },
+      {
+        "command": "codeMemory.askAboutSelection",
+        "title": "Code Memory: ✦ 이 코드에 대해 묻기"
+      },
+      {
+        "command": "codeMemory.exportFeedback",
+        "title": "Code Memory: AI 피드백 내보내기",
+        "icon": "$(export)"
+      },
+      {
+        "command": "codeMemory.runOnFunction",
+        "title": "Code Memory: 함수에 실행 (내부용)"
+      },
+      {
+        "command": "codeMemory.runEvaluation",
+        "title": "Code Memory: 평가 실행 (팀용)",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "codeMemory.openKeySettings",
+        "title": "Code Memory: AI 키 설정",
+        "icon": "$(key)"
+      },
+      {
+        "command": "codeMemory.toggleDemo",
+        "title": "Code Memory: 시연 모드 켜기 / 끄기",
+        "icon": "$(play)"
+      },
+      {
+        "command": "codeMemory.connectSourceProject",
+        "title": "Code Memory: 원본 프로젝트 위치 연결"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "codeMemory.saveSnippet",
+          "when": "editorTextFocus",
+          "group": "navigation@0.1"
+        },
+        {
+          "command": "codeMemory.askAboutSelection",
+          "when": "editorTextFocus",
+          "group": "navigation@0.2"
+        },
+        {
+          "command": "codeMemory.findSimilar",
+          "when": "editorTextFocus",
+          "group": "navigation@0.3"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "codeMemory.switchMode",
+          "when": "view == codeMemory.searchView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codeMemory.openKeySettings",
+          "when": "view == codeMemory.searchView",
+          "group": "navigation@1.5"
+        },
+        {
+          "command": "codeMemory.exportFeedback",
+          "when": "view == codeMemory.searchView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "codeMemory.openWalkthrough",
+          "when": "view == codeMemory.searchView",
+          "group": "navigation@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "codeMemory.runOnFunction",
+          "when": "false"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "codeMemory.saveSnippet",
+        "key": "ctrl+alt+s",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "codeMemory.focusSearch",
+        "key": "ctrl+alt+f"
+      },
+      {
+        "command": "codeMemory.askAboutSelection",
+        "key": "ctrl+alt+a",
+        "when": "editorTextFocus"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codeMemory",
+          "title": "Code Memory",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "codeMemory": [
+        {
+          "type": "webview",
+          "id": "codeMemory.searchView",
+          "name": "검색"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Code Memory",
+      "properties": {
+        "codeMemory.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "백엔드 API 주소"
+        },
+        "codeMemory.mock": {
+          "type": "boolean",
+          "default": true,
+          "description": "백엔드 없이 가짜 응답으로 테스트"
+        },
+        "codeMemory.searchLimit": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "검색 결과 최대 개수 (API 계약 범위 1~20)"
+        },
+        "codeMemory.confirmFunctionName": {
+          "type": "boolean",
+          "default": false,
+          "description": "저장하기 전에 자동으로 찾은 함수 이름을 확인·수정하는 입력창 띄우기"
+        },
+        "codeMemory.saveTimeoutSeconds": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 300,
+          "description": "저장 요청 제한 시간(초). 팀이 실제 저장 시간을 측정해서 정한다. 출력 패널과 저장 기록에 걸린 시간이 남는다"
+        },
+        "codeMemory.searchTimeoutSeconds": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 300,
+          "description": "검색 요청 제한 시간(초)"
+        },
+        "codeMemory.askTimeoutSeconds": {
+          "type": "integer",
+          "default": 45,
+          "minimum": 1,
+          "maximum": 300,
+          "description": "AI 질문(POST /ask) 제한 시간(초). 시간이 넘어도 자동으로 다시 보내지 않는다"
+        },
+        "codeMemory.askOnQuestionMark": {
+          "type": "boolean",
+          "default": true,
+          "description": "검색창 끝에 ? 가 있으면 Enter 로 바로 AI 질문. 끄면 Enter 는 항상 일반 검색 (Ctrl+Enter 는 계속 AI 질문)"
+        },
+        "codeMemory.codeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "함수 위에 \"💾 저장 | ✦ AI에게 묻기 | 🔍 비슷한 코드\" 표시 (프로젝트 폴더 안 파일만)"
+        },
+        "codeMemory.secretScan": {
+          "type": "boolean",
+          "default": true,
+          "description": "저장 전에 API 키·비밀번호·토큰 같은 비밀값을 찾아서 가릴지 묻기 (서버로 가는 코드만 가림, 내 파일은 그대로)"
+        },
+        "codeMemory.duplicateCheck": {
+          "type": "boolean",
+          "default": true,
+          "description": "저장 직전에 같은 코드로 검색해서, 거의 같은 코드가 이미 저장돼 있으면 묻기 (LLM 호출 없음)"
+        },
+        "codeMemory.duplicateThreshold": {
+          "type": "number",
+          "default": 0.95,
+          "minimum": 0.5,
+          "maximum": 1,
+          "description": "중복으로 볼 유사도 기준 (0.5~1). 높을수록 정말 같은 코드만 잡는다"
+        },
+        "codeMemory.reviewAfterDays": {
+          "type": "integer",
+          "default": 7,
+          "minimum": 0,
+          "maximum": 365,
+          "description": "처음 화면 \"다시 볼 만한 코드\"에 띄울 기준 — 저장한 지 며칠 지난 코드인지 (0 이면 바로)"
+        }
+      }
+    },
+    "walkthroughs": [
+      {
+        "id": "start",
+        "title": "Code Memory 시작하기",
+        "description": "코드를 저장하고, 말로 찾아서 다시 쓰는 방법",
+        "steps": [
+          {
+            "id": "mode",
+            "title": "1. 지금 모드 확인하기",
+            "description": "맨 아래 상태 표시줄의 **Code Memory** 칸에서 mock(가짜 서버)인지 실제 서버인지 확인해요.\n[모드 바꾸기](command:codeMemory.switchMode)",
+            "media": {
+              "markdown": "media/walkthrough/mode.md"
+            },
+            "completionEvents": [
+              "onCommand:codeMemory.switchMode"
+            ]
+          },
+          {
+            "id": "save",
+            "title": "2. 코드 저장하기",
+            "description": "코드를 선택하거나 함수 안에 커서를 두고 **Ctrl+Alt+S**. 우클릭 메뉴에도 있어요.\n[지금 저장해 보기](command:codeMemory.saveSnippet)",
+            "media": {
+              "markdown": "media/walkthrough/save.md"
+            },
+            "completionEvents": [
+              "onCommand:codeMemory.saveSnippet"
+            ]
+          },
+          {
+            "id": "search",
+            "title": "3. 말로 검색하기",
+            "description": "왼쪽 Code Memory 아이콘이나 **Ctrl+Alt+F**로 검색창을 열고, 찾고 싶은 코드를 말로 설명해요.\n[검색창 열기](command:codeMemory.focusSearch)",
+            "media": {
+              "markdown": "media/walkthrough/search.md"
+            },
+            "completionEvents": [
+              "onCommand:codeMemory.focusSearch"
+            ]
+          },
+          {
+            "id": "use",
+            "title": "4. 찾은 코드 쓰기",
+            "description": "결과 카드에서 원본 열기 · 삽입 · 복사 · 비교. 코드를 선택하고 우클릭 → **비슷한 코드 찾기**도 돼요.",
+            "media": {
+              "markdown": "media/walkthrough/use.md"
+            },
+            "completionEvents": [
+              "onView:codeMemory.searchView"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test",
+    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js out/test/evaluationKey.test.js out/test/projectLocations.test.js",
+    "vsix": "npx --yes @vscode/vsce@3 package --no-dependencies --skip-license"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.138.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "typescript-eslint": "^8.61.1",
+    "eslint": "^10.5.0",
+    "esbuild": "^0.28.1",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^6.0.3",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6"
+  }
+}

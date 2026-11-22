@@ -1,0 +1,207 @@
+{
+  "all_25_pairs_including_the_citation_failure": {
+    "pair_count": 25,
+    "reference_tokens_before": 41515,
+    "reference_tokens_after": 39123,
+    "reference_saving_percent": 5.761772853185596,
+    "provider_input_tokens_before": 54277,
+    "provider_input_tokens_after": 51885,
+    "provider_input_saving_percent": 4.407023232676824,
+    "note": "Includes all generated requests even though one optimized answer failed citation validation."
+  },
+  "successful_24_pairs": {
+    "paired_success_count": 24,
+    "paired_reference_tokens_before": 39820,
+    "paired_reference_tokens_after": 37555,
+    "weighted_reference_saving_percent": 5.688096433952787
+  },
+  "all_known_generation_usage": {
+    "calls": 60,
+    "input_tokens": 123073,
+    "output_tokens": 6269,
+    "total_tokens": 129342,
+    "groups": {
+      "initial_comparison": 50,
+      "targeted_json_fix": 4,
+      "real_sse": 2,
+      "controlled_budget_pressure": 4
+    }
+  },
+  "per_question": [
+    {
+      "query_id": "q01",
+      "reference_before": 1625,
+      "reference_after": 1497,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q02",
+      "reference_before": 1632,
+      "reference_after": 1504,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q03",
+      "reference_before": 1670,
+      "reference_after": 1555,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q04",
+      "reference_before": 1624,
+      "reference_after": 1496,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q05",
+      "reference_before": 1625,
+      "reference_after": 1497,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q06",
+      "reference_before": 1623,
+      "reference_after": 1623,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q07",
+      "reference_before": 1689,
+      "reference_after": 1689,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q08",
+      "reference_before": 1652,
+      "reference_after": 1524,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q09",
+      "reference_before": 1647,
+      "reference_after": 1519,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q10",
+      "reference_before": 1726,
+      "reference_after": 1726,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q11",
+      "reference_before": 1695,
+      "reference_after": 1568,
+      "http_before": 200,
+      "http_after": 502
+    },
+    {
+      "query_id": "q12",
+      "reference_before": 1646,
+      "reference_after": 1531,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q13",
+      "reference_before": 1625,
+      "reference_after": 1497,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q14",
+      "reference_before": 1651,
+      "reference_after": 1523,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q15",
+      "reference_before": 1632,
+      "reference_after": 1504,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q16",
+      "reference_before": 1665,
+      "reference_after": 1665,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q17",
+      "reference_before": 1611,
+      "reference_after": 1483,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q18",
+      "reference_before": 1716,
+      "reference_after": 1473,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q19",
+      "reference_before": 1729,
+      "reference_after": 1729,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q20",
+      "reference_before": 1651,
+      "reference_after": 1523,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q21",
+      "reference_before": 1704,
+      "reference_after": 1704,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q22",
+      "reference_before": 1653,
+      "reference_after": 1525,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q23",
+      "reference_before": 1635,
+      "reference_after": 1507,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q24",
+      "reference_before": 1658,
+      "reference_after": 1530,
+      "http_before": 200,
+      "http_after": 200
+    },
+    {
+      "query_id": "q25",
+      "reference_before": 1731,
+      "reference_after": 1731,
+      "http_before": 200,
+      "http_after": 200
+    }
+  ]
+}

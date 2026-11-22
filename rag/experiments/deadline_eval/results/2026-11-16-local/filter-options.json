@@ -1,0 +1,30 @@
+{
+  "projects": [
+    {
+      "name": "backend-api-regression",
+      "count": 1
+    },
+    {
+      "name": "capstone-rag",
+      "count": 9
+    },
+    {
+      "name": "mvp-auto-test-1104",
+      "count": 2
+    },
+    {
+      "name": "mvp-save-test",
+      "count": 4
+    }
+  ],
+  "languages": [
+    {
+      "name": "python",
+      "count": 10
+    },
+    {
+      "name": "typescript",
+      "count": 6
+    }
+  ]
+}

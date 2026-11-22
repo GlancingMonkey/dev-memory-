@@ -1,0 +1,68 @@
+{
+  "unit_tests": 78,
+  "filter_options": {
+    "projects": [
+      {
+        "name": "backend-api-regression",
+        "count": 1
+      },
+      {
+        "name": "capstone-rag",
+        "count": 9
+      },
+      {
+        "name": "mvp-auto-test-1104",
+        "count": 2
+      },
+      {
+        "name": "mvp-save-test",
+        "count": 4
+      }
+    ],
+    "languages": [
+      {
+        "name": "python",
+        "count": 10
+      },
+      {
+        "name": "typescript",
+        "count": 6
+      }
+    ]
+  },
+  "global_top_1": [
+    {
+      "id": 15,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "askCacheKey",
+      "start_line": 434,
+      "end_line": 436,
+      "code": "export function askCacheKey(q: string): string {\n  return q.trim().replace(/[?？\\s]+$/, '').replace(/\\s+/g, ' ').toLowerCase();\n}",
+      "score": 0.8542784452438354
+    }
+  ],
+  "other_language": "python",
+  "filtered_response": {
+    "results": [
+      {
+        "id": 4,
+        "project_name": "backend-api-regression",
+        "file_path": "sample.py",
+        "language": "python",
+        "function_name": "multiply",
+        "start_line": 1,
+        "end_line": 2,
+        "code": "def multiply(a, b):\n    return a * b",
+        "score": 0.81192274022563
+      }
+    ],
+    "filters": {
+      "project": null,
+      "language": "python"
+    }
+  },
+  "top_k_before_filter_bug_excluded": true,
+  "llm_calls": 0
+}

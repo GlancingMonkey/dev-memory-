@@ -1,0 +1,214 @@
+{
+  "state": "finished",
+  "query_id": "q16",
+  "mode": "baseline",
+  "question": "홀수는 제외하고 짝수로 된 새 목록을 만드는 함수",
+  "expected_status": "answered",
+  "expected_summary": "목록에서 2로 나눈 나머지가 0인 원소만 새 목록으로 반환한다.",
+  "http_status": 200,
+  "response": {
+    "status": "insufficient_context",
+    "answer": "저장된 코드만으로는 질문에 답할 근거가 부족합니다. 검색 조건이나 질문을 바꿔 주세요.",
+    "sources": [],
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 1001,
+      "output_tokens": 50,
+      "total_tokens": 1051
+    },
+    "history_used": 0
+  },
+  "api_seconds": 8.961022100000264,
+  "stage_seconds": {
+    "embedding": 0.049342359001457226,
+    "database_search": 0.01606602600077167,
+    "reference_count": 4.727702521002357,
+    "input_count": 0.37774824900043313,
+    "generation": 3.7868404730033944
+  },
+  "token_count_calls": {
+    "reference": 11,
+    "input": 1
+  },
+  "candidate_rows": [
+    {
+      "id": 17,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "buildAskRequest",
+      "start_line": 379,
+      "end_line": 393,
+      "code": "export const HISTORY_SEND_MAX = 2;          // 서버로 보내는 이전 대화 수\nconst HISTORY_ANSWER_MAX = 1500;            // 이전 답변은 앞부분만 (요청이 너무 커지지 않게)\n\n// POST /ask 요청 본문. history 는 있을 때만, stream 은 true 일 때만 넣는다 (예전 서버와 그대로 호환)\nexport function buildAskRequest(q: string, limit: number, history: AskTurn[] = [], stream = false): Record<string, unknown> {\n  const body: Record<string, unknown> = { q, limit };\n  const recent = history.slice(-HISTORY_SEND_MAX).map((h) => ({ q: h.q, answer: h.answer.slice(0, HISTORY_ANSWER_MAX) }));\n  if (recent.length) {\n    body.history = recent;\n  }\n  if (stream) {\n    body.stream = true;\n  }\n  return body;\n}",
+      "score": 0.8242644667625427
+    },
+    {
+      "id": 15,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "askCacheKey",
+      "start_line": 434,
+      "end_line": 436,
+      "code": "export function askCacheKey(q: string): string {\n  return q.trim().replace(/[?？\\s]+$/, '').replace(/\\s+/g, ' ').toLowerCase();\n}",
+      "score": 0.8032242059707642
+    },
+    {
+      "id": 13,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "reindent",
+      "start_line": 100,
+      "end_line": 113,
+      "code": "export function reindent(code: string, prefix: string, eol: string): string {\n  const lines = code.replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');\n  const widths = lines.filter((l) => l.trim().length > 0).map((l) => l.length - l.trimStart().length);\n  const common = widths.length ? Math.min(...widths) : 0;\n  return lines\n    .map((l, i) => {\n      const body = l.trim().length === 0 ? '' : l.slice(common);\n      if (i === 0 || body === '') {\n        return body;\n      }\n      return prefix + body;\n    })\n    .join(eol);\n}",
+      "score": 0.8002369403839111
+    },
+    {
+      "id": 1,
+      "project_name": "mvp-save-test",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "add",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def add(a, b):\r\n    return a + b",
+      "score": 0.7942103743553162
+    },
+    {
+      "id": 14,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "extractCitations",
+      "start_line": 229,
+      "end_line": 237,
+      "code": "export function extractCitations(answer: string): string[] {\n  const seen: string[] = [];\n  for (const m of answer.matchAll(/\\[(S\\d+)\\]/g)) {\n    if (!seen.includes(m[1])) {\n      seen.push(m[1]);\n    }\n  }\n  return seen;\n}",
+      "score": 0.7927650809288025
+    },
+    {
+      "id": 4,
+      "project_name": "backend-api-regression",
+      "file_path": "sample.py",
+      "language": "python",
+      "function_name": "multiply",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def multiply(a, b):\n    return a * b",
+      "score": 0.7891983515502019
+    },
+    {
+      "id": 16,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "clamp",
+      "start_line": 495,
+      "end_line": 498,
+      "code": "export function clamp(value: unknown, min: number, max: number, fallback: number): number {\n  const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback;\n  return Math.min(max, Math.max(min, n));\n}",
+      "score": 0.7799558871971338
+    },
+    {
+      "id": 9,
+      "project_name": "capstone-rag",
+      "file_path": "backend/llm.py",
+      "language": "python",
+      "function_name": "_remaining",
+      "start_line": 59,
+      "end_line": 63,
+      "code": "def _remaining(deadline: float) -> float:\n    remaining = deadline - monotonic()\n    if remaining <= 0:\n        raise LLMTimeoutError\n    return remaining",
+      "score": 0.779251959413062
+    },
+    {
+      "id": 2,
+      "project_name": "mvp-save-test",
+      "file_path": "even_numbers.py",
+      "language": "python",
+      "function_name": "even_numbers",
+      "start_line": 1,
+      "end_line": 2,
+      "code": "def even_numbers(values):\n    return [n for n in values if n % 2 == 0]",
+      "score": 0.777498722076416
+    },
+    {
+      "id": 12,
+      "project_name": "capstone-rag",
+      "file_path": "extension/src/logic.ts",
+      "language": "typescript",
+      "function_name": "adjustEndLine",
+      "start_line": 90,
+      "end_line": 95,
+      "code": "export function adjustEndLine(startLine: number, endLine: number, endCharacter: number): number {\n  if (endCharacter === 0 && endLine > startLine) {\n    return endLine - 1;\n  }\n  return endLine;\n}",
+      "score": 0.7750780582427979
+    }
+  ],
+  "selected_ids": [
+    17,
+    15
+  ],
+  "exclusions": [
+    {
+      "id": 13,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 1,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 14,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 4,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 16,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 9,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 2,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 12,
+      "reason": "budget",
+      "representative_id": null
+    }
+  ],
+  "reference_tokens": 460,
+  "full_input_tokens": 1001,
+  "generation_called": true,
+  "provider_result": {
+    "answer": {
+      "status": "insufficient_context",
+      "answer": "제공된 참고 자료에는 홀수를 제외하고 짝수만 담은 새 목록을 만드는 함수를 확인할 근거가 없습니다.",
+      "citation_ids": []
+    },
+    "model": "gpt-6.1-sol",
+    "usage": {
+      "input_tokens": 1001,
+      "output_tokens": 50,
+      "total_tokens": 1051
+    }
+  },
+  "source_fields_match_database": true,
+  "quality_review": null,
+  "expected_ids": [
+    2
+  ],
+  "expected_code_selected": false,
+  "expected_source_hit": false
+}

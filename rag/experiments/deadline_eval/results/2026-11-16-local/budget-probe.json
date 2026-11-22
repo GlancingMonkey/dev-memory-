@@ -1,0 +1,146 @@
+{
+  "purpose": "Real reference-token boundary check; not the production 4000-token setting",
+  "token_budget": 512,
+  "reference_tokens": 494,
+  "full_input_tokens": 997,
+  "selected_ids": [
+    1,
+    4,
+    2,
+    12
+  ],
+  "exclusions": [
+    {
+      "id": 17,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 13,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 16,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 11,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 6,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 8,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 15,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 14,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 9,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 3,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 5,
+      "reason": "budget",
+      "representative_id": null
+    },
+    {
+      "id": 10,
+      "reason": "budget",
+      "representative_id": null
+    }
+  ],
+  "calls": [
+    {
+      "tokens": 2231,
+      "seconds": 0.3942073460020765
+    },
+    {
+      "tokens": 120,
+      "seconds": 0.4464243690017611
+    },
+    {
+      "tokens": 224,
+      "seconds": 0.41666101600276306
+    },
+    {
+      "tokens": 532,
+      "seconds": 0.4001851470020483
+    },
+    {
+      "tokens": 340,
+      "seconds": 0.4155607559987402
+    },
+    {
+      "tokens": 494,
+      "seconds": 0.41310294900176814
+    },
+    {
+      "tokens": 761,
+      "seconds": 0.48637044800125295
+    },
+    {
+      "tokens": 650,
+      "seconds": 0.4811987949979084
+    },
+    {
+      "tokens": 638,
+      "seconds": 0.4140119860021514
+    },
+    {
+      "tokens": 622,
+      "seconds": 0.5688181500008795
+    },
+    {
+      "tokens": 622,
+      "seconds": 0.47533789400040405
+    },
+    {
+      "tokens": 631,
+      "seconds": 1.8937838919991918
+    },
+    {
+      "tokens": 665,
+      "seconds": 0.40085079799973755
+    },
+    {
+      "tokens": 627,
+      "seconds": 0.9218187649967149
+    },
+    {
+      "tokens": 607,
+      "seconds": 0.648015540002234
+    },
+    {
+      "tokens": 608,
+      "seconds": 0.409002551001322
+    },
+    {
+      "tokens": 674,
+      "seconds": 3.2365189640004246
+    }
+  ],
+  "generation_calls": 0,
+  "original_fields_preserved": true
+}

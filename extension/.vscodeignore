@@ -1,0 +1,19 @@
+.vscode/**
+.vscode-test/**
+out/**
+node_modules/**
+src/**
+.gitignore
+.yarnrc
+esbuild.js
+vsc-extension-quickstart.md
+**/tsconfig.json
+**/eslint.config.mjs
+**/*.map
+**/*.ts
+**/.vscode-test.*
+scripts/**
+# 패키지(.vsix)에 넣지 않을 것
+out/**
+*.vsix
+Claude outputs/**

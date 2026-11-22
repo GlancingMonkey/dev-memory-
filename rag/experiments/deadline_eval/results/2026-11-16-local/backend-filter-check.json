@@ -1,0 +1,375 @@
+{
+  "unit_tests": 65,
+  "real_db_api_cases": [
+    {
+      "case": "unfiltered",
+      "request": {
+        "q": "두 숫자를 더하는 함수 찾아줘",
+        "limit": 3
+      },
+      "status": 200,
+      "response": {
+        "results": [
+          {
+            "id": 1,
+            "project_name": "mvp-save-test",
+            "file_path": "sample.py",
+            "language": "python",
+            "function_name": "add",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def add(a, b):\r\n    return a + b",
+            "score": 0.8482345938682556
+          },
+          {
+            "id": 2,
+            "project_name": "mvp-save-test",
+            "file_path": "even_numbers.py",
+            "language": "python",
+            "function_name": "even_numbers",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def even_numbers(values):\n    return [n for n in values if n % 2 == 0]",
+            "score": 0.8117454051971436
+          },
+          {
+            "id": 6,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "safe_divide.py",
+            "language": "python",
+            "function_name": "safe_divide",
+            "start_line": 1,
+            "end_line": 4,
+            "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+            "score": 0.7973265647888184
+          }
+        ],
+        "filters": {
+          "project": null,
+          "language": null
+        }
+      }
+    },
+    {
+      "case": "project",
+      "request": {
+        "q": "두 숫자를 더하는 함수 찾아줘",
+        "limit": 1,
+        "project": "mvp-auto-test-1104"
+      },
+      "status": 200,
+      "response": {
+        "results": [
+          {
+            "id": 6,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "safe_divide.py",
+            "language": "python",
+            "function_name": "safe_divide",
+            "start_line": 1,
+            "end_line": 4,
+            "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+            "score": 0.7973265647888184
+          }
+        ],
+        "filters": {
+          "project": "mvp-auto-test-1104",
+          "language": null
+        }
+      }
+    },
+    {
+      "case": "language",
+      "request": {
+        "q": "두 숫자를 더하는 함수 찾아줘",
+        "language": " PyThOn "
+      },
+      "status": 200,
+      "response": {
+        "results": [
+          {
+            "id": 1,
+            "project_name": "mvp-save-test",
+            "file_path": "sample.py",
+            "language": "python",
+            "function_name": "add",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def add(a, b):\r\n    return a + b",
+            "score": 0.8482345938682556
+          },
+          {
+            "id": 2,
+            "project_name": "mvp-save-test",
+            "file_path": "even_numbers.py",
+            "language": "python",
+            "function_name": "even_numbers",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def even_numbers(values):\n    return [n for n in values if n % 2 == 0]",
+            "score": 0.8117454051971436
+          },
+          {
+            "id": 6,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "safe_divide.py",
+            "language": "python",
+            "function_name": "safe_divide",
+            "start_line": 1,
+            "end_line": 4,
+            "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+            "score": 0.7973265647888184
+          },
+          {
+            "id": 8,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "safe_divide.py",
+            "language": "python",
+            "function_name": "safe_divide",
+            "start_line": 1,
+            "end_line": 4,
+            "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+            "score": 0.7973265647888184
+          },
+          {
+            "id": 3,
+            "project_name": "mvp-save-test",
+            "file_path": "sort_users.py",
+            "language": "python",
+            "function_name": "sort_users",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def sort_users(users):\n    return sorted(users, key=lambda user: user[\"age\"])",
+            "score": 0.7543020473212617
+          },
+          {
+            "id": 5,
+            "project_name": "mvp-save-test",
+            "file_path": "sort_users.py",
+            "language": "python",
+            "function_name": "sort_users",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def sort_users(users):\r\n    return sorted(users, key=lambda user: user[\"age\"])",
+            "score": 0.7543020473212617
+          }
+        ],
+        "filters": {
+          "project": null,
+          "language": "python"
+        }
+      }
+    },
+    {
+      "case": "both",
+      "request": {
+        "q": "두 숫자를 더하는 함수 찾아줘",
+        "project": "mvp-auto-test-1104",
+        "language": "python"
+      },
+      "status": 200,
+      "response": {
+        "results": [
+          {
+            "id": 6,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "safe_divide.py",
+            "language": "python",
+            "function_name": "safe_divide",
+            "start_line": 1,
+            "end_line": 4,
+            "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+            "score": 0.7973265647888184
+          },
+          {
+            "id": 8,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "safe_divide.py",
+            "language": "python",
+            "function_name": "safe_divide",
+            "start_line": 1,
+            "end_line": 4,
+            "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+            "score": 0.7973265647888184
+          }
+        ],
+        "filters": {
+          "project": "mvp-auto-test-1104",
+          "language": "python"
+        }
+      }
+    },
+    {
+      "case": "blank",
+      "request": {
+        "q": "두 숫자를 더하는 함수 찾아줘",
+        "project": "  ",
+        "language": " "
+      },
+      "status": 200,
+      "response": {
+        "results": [
+          {
+            "id": 1,
+            "project_name": "mvp-save-test",
+            "file_path": "sample.py",
+            "language": "python",
+            "function_name": "add",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def add(a, b):\r\n    return a + b",
+            "score": 0.8482345938682556
+          },
+          {
+            "id": 2,
+            "project_name": "mvp-save-test",
+            "file_path": "even_numbers.py",
+            "language": "python",
+            "function_name": "even_numbers",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def even_numbers(values):\n    return [n for n in values if n % 2 == 0]",
+            "score": 0.8117454051971436
+          },
+          {
+            "id": 6,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "safe_divide.py",
+            "language": "python",
+            "function_name": "safe_divide",
+            "start_line": 1,
+            "end_line": 4,
+            "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+            "score": 0.7973265647888184
+          },
+          {
+            "id": 8,
+            "project_name": "mvp-auto-test-1104",
+            "file_path": "safe_divide.py",
+            "language": "python",
+            "function_name": "safe_divide",
+            "start_line": 1,
+            "end_line": 4,
+            "code": "def safe_divide(a, b):\r\n    if b == 0:\r\n        return None\r\n    return a / b",
+            "score": 0.7973265647888184
+          },
+          {
+            "id": 3,
+            "project_name": "mvp-save-test",
+            "file_path": "sort_users.py",
+            "language": "python",
+            "function_name": "sort_users",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def sort_users(users):\n    return sorted(users, key=lambda user: user[\"age\"])",
+            "score": 0.7543020473212617
+          },
+          {
+            "id": 5,
+            "project_name": "mvp-save-test",
+            "file_path": "sort_users.py",
+            "language": "python",
+            "function_name": "sort_users",
+            "start_line": 1,
+            "end_line": 2,
+            "code": "def sort_users(users):\r\n    return sorted(users, key=lambda user: user[\"age\"])",
+            "score": 0.7543020473212617
+          }
+        ],
+        "filters": {
+          "project": null,
+          "language": null
+        }
+      }
+    },
+    {
+      "case": "absent",
+      "request": {
+        "q": "두 숫자를 더하는 함수 찾아줘",
+        "project": "__no_such_project_20261116__"
+      },
+      "status": 200,
+      "response": {
+        "results": [],
+        "filters": {
+          "project": "__no_such_project_20261116__",
+          "language": null
+        }
+      }
+    },
+    {
+      "case": "injection_literal",
+      "request": {
+        "q": "두 숫자를 더하는 함수 찾아줘",
+        "project": "' OR 1=1 --"
+      },
+      "status": 200,
+      "response": {
+        "results": [],
+        "filters": {
+          "project": "' OR 1=1 --",
+          "language": null
+        }
+      }
+    },
+    {
+      "case": "missing_language",
+      "request": {
+        "q": "두 숫자를 더하는 함수 찾아줘",
+        "language": "__missing_language__"
+      },
+      "status": 200,
+      "response": {
+        "results": [],
+        "filters": {
+          "project": null,
+          "language": "__missing_language__"
+        }
+      }
+    },
+    {
+      "case": "too_long",
+      "request": {
+        "q": "두 숫자를 더하는 함수 찾아줘",
+        "project": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "status": 422,
+      "response": {
+        "detail": "프로젝트·언어 조건은 앞뒤 공백을 제외하고 각각 200자 이하여야 합니다."
+      }
+    },
+    {
+      "case": "invalid_limit",
+      "request": {
+        "q": "두 숫자를 더하는 함수 찾아줘",
+        "limit": 21
+      },
+      "status": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "less_than_equal",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be less than or equal to 20",
+            "input": "21",
+            "ctx": {
+              "le": 20
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "top_k_filter_order_verified": true,
+  "available_languages": [
+    {
+      "name": "python",
+      "count": 6
+    }
+  ],
+  "original_data_preserved": true,
+  "llm_calls": 0
+}
