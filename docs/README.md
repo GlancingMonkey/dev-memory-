@@ -1,12 +1,13 @@
 # 문서 안내
 
-**목적에 맞는 문서부터 읽으세요.** 현재 개발 기준은 develop이며 API 이름·필드·상태는 [API_CONTRACT.md](../API_CONTRACT.md)를 우선합니다.
+**목적에 맞는 문서부터 읽으세요.** main은 검증한 통합 버전이며, 다음 변경은 develop에 모읍니다. API 이름·필드·상태는 [API_CONTRACT.md](../API_CONTRACT.md)를 우선합니다.
 
 ## 처음 실행하거나 시연할 때
 
 | 하고 싶은 일 | 읽을 문서 |
 |---|---|
 | 프로젝트를 빠르게 이해하기 | [프로젝트 소개](../README.md) |
+| main 통합 버전의 주요 변경 확인하기 | [릴리스 노트](../CHANGELOG.md) |
 | 전체 연결 구조와 데이터 위치 이해하기 | [시스템 구조](ARCHITECTURE.md) |
 | 새 PC에서 DB·Backend 준비하기 | [개발환경과 실행](DEVELOPMENT.md) |
 | Windows Extension 빌드·설정·사용하기 | [Extension 안내](../extension/README.md) |
@@ -22,6 +23,7 @@
 | 기존 스니펫의 임베딩 재처리 | [RAG 재처리 안내](../rag/README.md) |
 | 단위 테스트와 실제 DB 시험 구분 | [테스트 안내](TESTING.md) |
 | 담당 영역·브랜치·PR 규칙 확인 | [팀 개발 규칙](../PROJECT_GUIDE.md) |
+| 오류·개선 의견과 PR 남기기 | [기여 안내](../CONTRIBUTING.md) |
 | 다음 개발 범위와 완료 조건 합의 | [후속 개발 계획](ROADMAP.md) |
 
 ## 확인한 결과를 찾을 때

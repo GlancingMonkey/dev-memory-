@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="540" viewBox="0 0 1600 540" role="img" aria-labelledby="title desc">
+  <title id="title">Code Memory — Save your code. Find your flow.</title>
+  <desc id="desc">Product banner for a VS Code snippet search extension. The code card is an illustration, not a screenshot of the application.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#101b32"/>
+      <stop offset="1" stop-color="#090f1d"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop stop-color="#3878f6" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#3878f6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="540" rx="24" fill="url(#background)"/>
+  <ellipse cx="1280" cy="270" rx="320" ry="265" fill="url(#glow)"/>
+  <g font-family="Inter, Arial, sans-serif">
+    <rect x="88" y="66" width="58" height="58" rx="16" fill="#3378f4"/>
+    <path d="m110 84-10 11 10 11m13-22 10 11-10 11" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="117" cy="95" r="2.5" fill="#fff"/>
+    <text x="167" y="101" fill="#a7bbdf" font-size="15" font-weight="600" letter-spacing="2.6">YOUR PERSONAL CODE MEMORY</text>
+    <text x="84" y="243" fill="#f5f8ff" font-size="92" font-weight="700" letter-spacing="-4">Code Memory</text>
+    <text x="88" y="309" fill="#c6d8fc" font-size="36" letter-spacing="-.8">Save your code. Find your flow.</text>
+    <text x="90" y="399" fill="#96a8c5" font-size="22">Capture in VS Code. Search in natural language.</text>
+    <text x="90" y="434" fill="#96a8c5" font-size="22">Ask AI with the code behind the answer.</text>
+    <path d="M885 88v364" stroke="#243149"/>
+    <rect x="944" y="88" width="566" height="320" rx="18" fill="#121f34" stroke="#30415d"/>
+    <path d="M944 148h566" stroke="#30415d"/>
+    <circle cx="970" cy="118" r="4" fill="#527092"/>
+    <circle cx="987" cy="118" r="4" fill="#527092"/>
+    <circle cx="1004" cy="118" r="4" fill="#527092"/>
+    <text x="1040" y="124" fill="#b9cbea" font-size="17">is_positive.py</text>
+    <text x="1478" y="124" text-anchor="end" fill="#728aa9" font-size="12" letter-spacing="1">SNIPPET EXAMPLE</text>
+    <g font-family="'DejaVu Sans Mono', Consolas, monospace" font-size="21">
+      <text x="978" y="214" fill="#617797">1</text>
+      <text x="1022" y="214"><tspan fill="#bda5ff">def </tspan><tspan fill="#7fc8ff">is_positive</tspan><tspan fill="#d5e2f8">(value):</tspan></text>
+      <text x="978" y="254" fill="#617797">2</text>
+      <text x="1072" y="254"><tspan fill="#bda5ff">return </tspan><tspan fill="#d5e2f8">value &gt; </tspan><tspan fill="#f5c17a">0</tspan></text>
+    </g>
+    <path d="M978 302h498" stroke="#273750"/>
+    <text x="978" y="337" fill="#6f89ad" font-size="12" letter-spacing="1.4">CODE + PROJECT + FILE + LINE RANGE</text>
+    <text x="978" y="371" fill="#c4d4ed" font-size="19">Keep the code. Keep its context.</text>
+    <g font-size="13" font-weight="600" letter-spacing="1.4">
+      <circle cx="965" cy="451" r="5" fill="#6c9fff"/>
+      <text x="983" y="456" fill="#b0c4e6">SAVE</text>
+      <path d="M1050 451h82" stroke="#30415d"/>
+      <circle cx="1150" cy="451" r="5" fill="#6c9fff"/>
+      <text x="1168" y="456" fill="#b0c4e6">SEARCH</text>
+      <path d="M1260 451h82" stroke="#30415d"/>
+      <circle cx="1360" cy="451" r="5" fill="#6c9fff"/>
+      <text x="1378" y="456" fill="#b0c4e6">ASK</text>
+    </g>
+  </g>
+</svg>

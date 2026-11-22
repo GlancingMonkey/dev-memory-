@@ -1,0 +1,32 @@
+name: Bug report
+description: 실행 중 발견한 문제를 알려 주세요.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "재현에 필요한 내용만 남겨 주세요. 실제 API 키·토큰·비밀번호·.env와 공개하지 않을 개인 경로는 제외해 주세요."
+  - type: textarea
+    id: steps
+    attributes:
+      label: 재현 순서
+      description: 어떤 화면에서 무엇을 했을 때 문제가 발생했나요?
+      placeholder: "1. Code Memory에서 …\n2. …"
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 기대한 결과와 실제 결과
+      placeholder: "기대한 결과:\n실제 결과:"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 실행 환경
+      description: OS, VS Code 버전, Dev Container 사용 여부, 브랜치·커밋 등
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 로그 또는 화면
+      description: 오류 문구와 관련 화면을 첨부해 주세요. 비밀값은 지워 주세요.

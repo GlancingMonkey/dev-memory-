@@ -1,0 +1,23 @@
+name: Feature request
+description: 더 편하게 쓰기 위한 아이디어를 제안해 주세요.
+title: "[Idea] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 어떤 작업이 불편한가요?
+      description: 실제 사용 상황과 해결하고 싶은 문제를 알려 주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 원하는 사용 흐름
+      description: 어떤 동작이 추가되거나 바뀌면 좋을까요?
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: 참고 자료
+      description: 관련 화면, 대안 또는 연결되는 이슈가 있다면 남겨 주세요.
