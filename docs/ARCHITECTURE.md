@@ -116,6 +116,8 @@ DB에 `null`이라는 새 상태를 추가하는 의미가 아니다. Extension�
 | 프로그램 코드·문서·실험 산출물 | Git 저장소. 다른 PC의 실제 DB 행과 로컬 원본 파일은 포함하지 않음 |
 
 원본 열기는 로컬 파일을 찾아 이동하는 기능이다. Git을 내려받거나 DB 검색에 성공해도 다른 PC의 원본 파일이 자동으로 생기지는 않는다.
+
+Extension은 연 프로젝트의 위치를 로컬 globalState에 기억한다. 원본 프로젝트가 현재 작업 영역에 없어도 파일만 열 수 있고, 위치를 모르면 한 번 연결한다. 로컬·원격 확장 환경의 위치는 구분하며, 절대 경로는 API 요청·DB·Git으로 보내지 않는다. 파일 이름·상대 경로가 바뀐 경우는 현재 파일에서 다시 저장한다.
 재처리로 DB 상태를 바꿔도 과거 Extension 저장 기록이 자동으로 최신화되는 것으로 해석하지 않는다.
 
 근거: [Compose volume](../docker-compose.yml), [workspace 상태 연결](../extension/src/extension.ts), [저장 기록 관리](../extension/src/sidebar.ts).
