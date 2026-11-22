@@ -1,5 +1,7 @@
 # Code Memory Extension
 
+처음 사용한다면 [사진으로 따라 하는 사용 가이드](../docs/USER_GUIDE.md)를 확인하세요. 코드 저장부터 검색·필터·AI 답변까지 실제 밝은 테마 화면으로 설명합니다.
+
 VS Code에서 선택한 코드·메타데이터를 저장하고, Backend의 실제 검색 결과를 표시하는 TypeScript Extension이다.
 
 ## 현재 기능
