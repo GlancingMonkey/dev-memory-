@@ -1,0 +1,363 @@
+{
+  "reviewed_at": "2026-11-22T04:23:15.989Z",
+  "reviewer": "GlancingMonkey",
+  "role": "rag_backend_owner",
+  "dataset": "2026-11-16 original 4000-token comparison",
+  "reviewed_count": 50,
+  "total_count": 50,
+  "limits_acknowledged": true,
+  "all_records_reviewed": true,
+  "independent_teammate_claimed": false,
+  "records": [
+    {
+      "query_id": "q01",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q01.baseline.json"
+    },
+    {
+      "query_id": "q02",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q02.baseline.json"
+    },
+    {
+      "query_id": "q03",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q03.baseline.json"
+    },
+    {
+      "query_id": "q04",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q04.baseline.json"
+    },
+    {
+      "query_id": "q05",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q05.baseline.json"
+    },
+    {
+      "query_id": "q06",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q06.baseline.json"
+    },
+    {
+      "query_id": "q07",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q07.baseline.json"
+    },
+    {
+      "query_id": "q08",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q08.baseline.json"
+    },
+    {
+      "query_id": "q09",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q09.baseline.json"
+    },
+    {
+      "query_id": "q10",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q10.baseline.json"
+    },
+    {
+      "query_id": "q11",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q11.baseline.json"
+    },
+    {
+      "query_id": "q12",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q12.baseline.json"
+    },
+    {
+      "query_id": "q13",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q13.baseline.json"
+    },
+    {
+      "query_id": "q14",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q14.baseline.json"
+    },
+    {
+      "query_id": "q15",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q15.baseline.json"
+    },
+    {
+      "query_id": "q16",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q16.baseline.json"
+    },
+    {
+      "query_id": "q17",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q17.baseline.json"
+    },
+    {
+      "query_id": "q18",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q18.baseline.json"
+    },
+    {
+      "query_id": "q19",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q19.baseline.json"
+    },
+    {
+      "query_id": "q20",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q20.baseline.json"
+    },
+    {
+      "query_id": "q21",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q21.baseline.json"
+    },
+    {
+      "query_id": "q22",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q22.baseline.json"
+    },
+    {
+      "query_id": "q23",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q23.baseline.json"
+    },
+    {
+      "query_id": "q24",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q24.baseline.json"
+    },
+    {
+      "query_id": "q25",
+      "mode": "baseline",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q25.baseline.json"
+    },
+    {
+      "query_id": "q01",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q01.optimized.json"
+    },
+    {
+      "query_id": "q02",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q02.optimized.json"
+    },
+    {
+      "query_id": "q03",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q03.optimized.json"
+    },
+    {
+      "query_id": "q04",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q04.optimized.json"
+    },
+    {
+      "query_id": "q05",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q05.optimized.json"
+    },
+    {
+      "query_id": "q06",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q06.optimized.json"
+    },
+    {
+      "query_id": "q07",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q07.optimized.json"
+    },
+    {
+      "query_id": "q08",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q08.optimized.json"
+    },
+    {
+      "query_id": "q09",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q09.optimized.json"
+    },
+    {
+      "query_id": "q10",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q10.optimized.json"
+    },
+    {
+      "query_id": "q11",
+      "mode": "optimized",
+      "assessment": "failure_acknowledged",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q11.optimized.json"
+    },
+    {
+      "query_id": "q12",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q12.optimized.json"
+    },
+    {
+      "query_id": "q13",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q13.optimized.json"
+    },
+    {
+      "query_id": "q14",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q14.optimized.json"
+    },
+    {
+      "query_id": "q15",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q15.optimized.json"
+    },
+    {
+      "query_id": "q16",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q16.optimized.json"
+    },
+    {
+      "query_id": "q17",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q17.optimized.json"
+    },
+    {
+      "query_id": "q18",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q18.optimized.json"
+    },
+    {
+      "query_id": "q19",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q19.optimized.json"
+    },
+    {
+      "query_id": "q20",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q20.optimized.json"
+    },
+    {
+      "query_id": "q21",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q21.optimized.json"
+    },
+    {
+      "query_id": "q22",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q22.optimized.json"
+    },
+    {
+      "query_id": "q23",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q23.optimized.json"
+    },
+    {
+      "query_id": "q24",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q24.optimized.json"
+    },
+    {
+      "query_id": "q25",
+      "mode": "optimized",
+      "assessment": "supported",
+      "note": "",
+      "source_file": "rag/experiments/deadline_eval/results/2026-11-16-local/q25.optimized.json"
+    }
+  ]
+}

@@ -67,3 +67,7 @@ uv run --locked python -m rag.experiments.deadline_eval.evaluate --ask --budget-
 - 512토큰 budget-probe는 실제 계수로 전체 스니펫 경계를 확인하는 별도 검사다. 운영 예산 4000을 바꾸지 않으며 답변을 생성하지 않는다.
 - 직접 호출한 FastAPI 처리 시간이며 TCP·Windows UI 시간은 포함하지 않는다.
 - 작은 내부 데이터셋의 결과이며 전체 실무 품질·경쟁 제품 우위를 증명하지 않는다.
+
+## 기존 결과의 본인 검토
+
+2026-11-22 작성자가 기존 25문항의 전후 답변 50건을 검토했다. 모델 결과를 재실행하거나 덮어쓰지 않고 판정만 [별도 JSON](reviews/2026-11-22-owner-review.json)과 [대조 기록](reviews/2026-11-22-owner-review-validation.json)에 남겼다. 작성자 본인의 내부 검토이며 독립 평가가 아니다. [조건과 한계](../../../docs/INTEGRATION_TEST_2026-11-22.md#작성자-본인-답변-검토-완료)를 함께 읽는다.
