@@ -1,0 +1,64 @@
+{
+  "reviewer": "GlancingMonkey",
+  "role": "rag_backend_owner",
+  "reviewed_at": "2026-11-22T04:23:15.989Z",
+  "count": 50,
+  "unique_questions": 25,
+  "assessments": {
+    "supported": 49,
+    "failure_acknowledged": 1
+  },
+  "by_expected_status": {
+    "answered": {
+      "count": 40,
+      "assessments": {
+        "supported": 39,
+        "failure_acknowledged": 1
+      }
+    },
+    "insufficient_context": {
+      "count": 10,
+      "assessments": {
+        "supported": 10
+      }
+    }
+  },
+  "limits_acknowledged": true,
+  "independent_review": false,
+  "classification_changes_confirmed_by_user": [
+    {
+      "id": "q21",
+      "mode": "baseline",
+      "before": "failure_acknowledged",
+      "after": "supported"
+    },
+    {
+      "id": "q22",
+      "mode": "baseline",
+      "before": "failure_acknowledged",
+      "after": "supported"
+    },
+    {
+      "id": "q23",
+      "mode": "baseline",
+      "before": "failure_acknowledged",
+      "after": "supported"
+    },
+    {
+      "id": "q24",
+      "mode": "baseline",
+      "before": "failure_acknowledged",
+      "after": "supported"
+    },
+    {
+      "id": "q25",
+      "mode": "baseline",
+      "before": "failure_acknowledged",
+      "after": "supported"
+    }
+  ],
+  "raw_review_sha256": "cc144d254af957d306dd756adad003f2c08f5552bde71d6b0780fa8ebdebd3f8",
+  "original_review_preserved": true,
+  "original_model_artifacts_preserved": true,
+  "new_llm_calls": 0
+}
