@@ -1,31 +1,74 @@
 <p align="center">
-  <img src="extension/media/icon.png" width="80" alt="Code Memory 아이콘">
+  <img src="docs/assets/repository-hero.svg" width="1200" alt="Code Memory — 저장한 코드를 자연어로 찾고, 출처와 함께 이해하세요.">
 </p>
 
-# dev-memory
+<p align="center">
+  <strong>저장한 코드가, 다음 작업의 출발점이 됩니다.</strong><br>
+  VS Code에서 코드를 저장하고, 말로 검색하고, 필요한 순간에만 AI에게 물어보세요.
+</p>
 
-**저장해 둔 코드를, 필요한 순간에 자연어로 다시 찾습니다.**
+<p align="center">
+  <a href="#시작하기">시작하기</a> ·
+  <a href="docs/DEMO.md">사용 흐름</a> ·
+  <a href="docs/README.md">문서</a> ·
+  <a href="CHANGELOG.md">릴리스 노트</a> ·
+  <a href="https://github.com/GlancingMonkey/dev-memory-/issues">피드백</a>
+</p>
 
-VS Code에서 코드 스니펫을 저장하고 여러 프로젝트의 개인 코드 DB를 검색하는 4인 컴퓨터공학 캡스톤 프로젝트입니다. VS Code 확장 이름은 **Code Memory**입니다.
+**Code Memory**는 여러 프로젝트에 흩어진 코드 조각을 모아 두고 다시 찾아 쓰는 VS Code 확장입니다. 저장소 이름은 `dev-memory-`이며, 현재는 소스에서 빌드해 사용하는 로컬 개발 구성으로 제공합니다. `main`은 검증한 통합 버전, `develop`은 다음 변경을 모으는 브랜치입니다.
 
-[시작하기](docs/DEVELOPMENT.md) · [시연 가이드](docs/DEMO.md) · [시스템 구조](docs/ARCHITECTURE.md) · [API 계약](API_CONTRACT.md) · [전체 문서](docs/README.md)
+## 기억해 두고, 다시 찾아 쓰세요
 
-> **현재 작업 · 2026-11-16**<br>
-> develop에서 저장·자동 임베딩·의미 검색·출처가 있는 AI 답변을 연결했습니다.<br>
-> 11/16 변경에는 서버 검색 조건·필터 목록과 Context 중복 제거를 추가했습니다.<br>
-> 실제 결과와 아직 확인하지 않은 UI 범위는 [11월 16일 기록](docs/EVALUATION_2026-11-16.md)을 따릅니다. develop 반영·18일 팀 통합 확인은 별도입니다.
-
-## 무엇을 할 수 있나요?
-
-| 저장 | 검색 | 다시 사용 |
+| 저장 | 검색 | AI에게 질문 |
 |---|---|---|
-| 선택한 코드와 프로젝트·파일·줄 번호 보관 | 한국어 등 자연어 질문으로 관련 코드 검색 | 원본 파일과 해당 줄로 이동 |
-| E5 벡터를 같은 DB 행에 자동 저장 | 코드·위치·유사도를 결과 목록에서 확인 | 코드 복사·삽입·선택 코드와 비교 |
-| 원문 저장과 검색 준비 상태를 구분 | 프로젝트·언어 조건을 DB 후보에 적용 | 필요한 경우 AI 설명과 실제 출처 확인 |
+| 필요한 코드를 선택하고 저장합니다. | “0으로 나누는 경우를 처리하는 함수”처럼 말로 찾습니다. | “이 함수에 0을 넣으면?”처럼 동작을 묻습니다. |
+| 원문과 프로젝트·파일·줄 번호를 보관하고 E5 벡터를 만듭니다. | 관련 코드와 위치를 확인하고 바로 복사·삽입합니다. | 찾은 코드로 답변을 만들고, 출처에서 근거를 확인합니다. |
+| 임베딩에 실패해도 원문과 저장 ID를 유지합니다. | **일반 검색에는 LLM을 호출하지 않습니다.** | **사용자가 AI 질문을 실행할 때 LLM을 호출합니다.** |
 
-Backend의 project·language 조건은 **전체 후보를 좁힌 뒤 Top-K**를 고릅니다. GET /filters는 검색 가능한 코드의 이름·개수를 제공합니다. 기본 필터 조합은 실제 API·DB·Windows 화면에서 대조했습니다. Extension은 이 PC의 프로젝트 위치를 기억하므로 다른 프로젝트에서 검색해도 원본 파일만 바로 열 수 있습니다. 모르는 위치는 한 번 연결하며 실제 파일은 PC에 있어야 합니다.
+검색 대상은 **직접 저장한 코드**입니다. Extension은 이 PC에서 연결한 프로젝트 위치를 기억하므로, 다른 프로젝트를 작업하면서도 원본 파일을 바로 열 수 있습니다. 처음 보는 위치는 한 번 연결하며, 실제 파일은 PC에 있어야 합니다.
 
-## 어떻게 연결되나요?
+## 실제 Extension 화면
+
+<table>
+  <tr>
+    <td width="54%" valign="top">
+      <h3>답변에서 코드까지, 한곳에서.</h3>
+      <p>AI 답변의 출처 번호를 누르면 해당 참고 코드로 이동합니다. 파일 위치와 줄 번호를 확인하고 원본을 열거나 코드를 다시 사용할 수 있습니다.</p>
+      <p><strong>검색 범위</strong><br>일반 검색은 프로젝트·언어로 좁힐 수 있습니다.</p>
+      <p><strong>원본 확인</strong><br>저장한 코드와 지금 파일의 내용·위치가 달라졌는지 표시하고 비교합니다.</p>
+      <p><strong>개인 AI 키</strong><br>OpenAI·Claude·Gemini 키를 VS Code 비밀 저장소에 보관하고 AI 질문에 사용합니다.</p>
+      <p><a href="extension/README.md">기능과 단축키 살펴보기 →</a></p>
+    </td>
+    <td align="center" valign="top">
+      <img src="docs/images/integration-2026-11-18-gemini.png" width="330" alt="저장된 is_positive 코드로 만든 Gemini 답변과 S1 출처, 원본 파일 위치가 표시된 실제 Code Memory 화면">
+    </td>
+  </tr>
+</table>
+
+화면은 [11월 18일 실제 Gemini 연결 기록](docs/INTEGRATION_TEST_2026-11-18.md)입니다. 표시된 시간·토큰은 해당 호출의 관측값입니다. 현재 AI 질문은 일반 검색의 필터와 별도로 **전체 DB**를 대상으로 하며, 화면에서도 이 범위를 안내합니다.
+
+## 시작하기
+
+검증한 구성은 **Windows 로컬 VS Code의 Extension + 같은 PC의 Dev Container에 실행한 Backend·PostgreSQL**입니다. 임베딩은 CPU에서 실행합니다.
+
+| 순서 | 안내 |
+|---|---|
+| 1. 환경 준비 | [개발 가이드](docs/DEVELOPMENT.md)에서 Docker·Dev Container·DB 스키마·모델 준비 |
+| 2. Extension 실행 | [빌드와 확장 개발 호스트 열기](extension/README.md#빌드) |
+| 3. 실제 서버 연결 | [설정](extension/README.md#실제-api-설정)에서 `codeMemory.mock=false`와 Backend 주소 확인 |
+| 4. 첫 코드 저장·검색 | [시연 가이드](docs/DEMO.md)의 저장 → 검색 → 원본 열기 순서 실행 |
+
+환경과 DB 준비가 끝났다면 **Dev Container의 저장소 루트**에서 서버를 실행합니다.
+
+```bash
+uv run --locked uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+Windows에서 [서버 상태](http://127.0.0.1:8000/health)와 [API 문서](http://127.0.0.1:8000/docs)를 확인합니다. 포트 전달 주소가 다르면 VS Code **포트** 탭의 주소를 사용하세요. `/health`는 서버 실행 여부를 확인하며, DB·모델 준비 여부는 별도로 확인합니다.
+
+AI 답변을 사용할 때는 [개인 키·서버 기본 키 안내](docs/PERSONAL_LLM_KEYS.md)를 따릅니다. 세 제공자의 연결 구현과 실제로 확인한 범위는 해당 가이드와 날짜별 검증 기록에서 구분합니다.
+
+## 작동 방식
 
 ```mermaid
 flowchart LR
@@ -36,63 +79,48 @@ flowchart LR
     E --> F[코사인 거리로 Top-K 검색]
     D --> F
     F -->|일반 검색| G[VS Code 결과 목록]
-    F -->|명시적 AI 질문| H[Context 중복 제거·예산 확인]
-    H --> I[LLM 답변·실제 출처]
+    F -->|AI 질문| H[Context 중복 제거·토큰 예산]
+    H --> I[LLM 답변·출처]
 ```
 
-정상 저장은 원문을 먼저 커밋하고, 벡터와 처리 상태를 같은 행에 기록한 뒤 응답합니다. 임베딩에 실패해도 원문과 ID는 남습니다. 자세한 실패 처리와 데이터 위치는 [시스템 구조](docs/ARCHITECTURE.md)를 참고하세요.
+정상 저장은 원문을 먼저 커밋하고, 같은 행에 벡터와 처리 상태를 기록한 뒤 응답합니다. 임베딩 실패 시 원문을 보존하며, 기존 ID로 재처리할 수 있습니다. [시스템 구조](docs/ARCHITECTURE.md)와 [공식 API 계약](API_CONTRACT.md)에 처리 순서·오류 규칙을 정리했습니다.
 
-## 시작하기
+| 영역 | 구성 |
+|---|---|
+| Extension | TypeScript · VS Code API |
+| Backend | Python · FastAPI |
+| 검색 | PostgreSQL · pgvector · 코사인 거리 |
+| Embedding | `intfloat/multilingual-e5-base` · 정규화한 768차원 벡터 |
+| AI 질문 | 검색한 코드 · Context 중복 제거 · 토큰 예산 · 출처 표시 |
+| 개발환경 | Docker Compose · Dev Container · uv |
 
-검증한 개발 구성은 **같은 PC의 Dev Container에서 Backend·DB**, **Windows 로컬 VS Code에서 Extension**입니다.
+## 확인 가능한 검증 기록
 
-1. 처음 실행한다면 [개발 가이드](docs/DEVELOPMENT.md)에서 환경·DB 스키마·모델 준비를 확인합니다.
-2. [Extension 가이드](extension/README.md)대로 빌드하고 확장 개발 호스트를 엽니다.
-3. `codeMemory.mock=false`와 실제 Backend 주소를 확인합니다.
-4. [시연 가이드](docs/DEMO.md)대로 저장·검색·원본 열기를 확인합니다.
+구현 상태와 함께 **어떻게 확인했는지**를 공개합니다.
 
-환경과 DB 준비가 끝났다면 Dev Container의 저장소 루트에서 서버를 실행합니다.
+| 확인 내용 | 기록 |
+|---|---|
+| main 통합 전 Python 103개·Extension 87개 검사, TypeScript·ESLint | [통합 PR #63](https://github.com/GlancingMonkey/dev-memory-/pull/63), [테스트 안내](docs/TESTING.md) |
+| 실제 API·DB 검색, 원본 이동·필터·오류 복구와 저장·키 UI | [11월 21일](docs/INTEGRATION_TEST_2026-11-21.md), [11월 22일](docs/INTEGRATION_TEST_2026-11-22.md) |
+| 25개 질문의 Context 비교, 기존 답변 50건의 작성자 본인 검토 | [평가 조건·결과·한계](docs/EVALUATION_2026-11-16.md) |
+| CPU·10개 질문의 Embedding 세 모델 비교 | [비교 결과와 원본 산출물](rag/experiments/embedding_compare/comparison_results.md) |
 
-```bash
-uv run --locked uvicorn backend.main:app --host 0.0.0.0 --port 8000
-```
+작은 내부 평가와 작성자 검토는 독립 평가나 모든 코드에서의 정확도 보장이 아닙니다. 실제 제공자 호출, 모의 UI 응답, 기존 결과 검토를 구분해 기록합니다. E5 채택 근거도 당시 샘플·CPU 조건의 정확도·속도·차원 균형입니다.
 
-Windows에서 [서버 상태](http://127.0.0.1:8000/health)와 [API 문서](http://127.0.0.1:8000/docs)를 확인합니다. 포트 전달 주소가 다르면 VS Code **포트** 탭의 주소를 사용합니다. /health 정상 여부와 DB·모델 준비 여부는 별도로 확인합니다.
+## 데이터와 키
 
-사용자 OpenAI·Claude·Gemini 키를 연결할 때는 [개인 AI 키 안내](docs/PERSONAL_LLM_KEYS.md)를 확인합니다. 키는 Extension SecretStorage에서 선택하고 AI 요청에만 전달합니다.
+- 코드와 메타데이터·벡터는 연결한 PostgreSQL에 저장합니다. Git을 내려받는 것만으로 다른 PC의 DB 데이터와 원본 파일이 만들어지지는 않습니다.
+- 개인 API 키는 VS Code **SecretStorage**에 보관하며, 검색·저장 요청에는 포함하지 않습니다. AI 질문에만 선택한 키를 전달합니다.
+- AI 질문 시 질문과 참고 코드가 선택한 LLM 제공자로 전달됩니다. 키 선택·전송 조건은 [개인 AI 키 안내](docs/PERSONAL_LLM_KEYS.md)를 확인하세요.
 
-## 구현 상태와 근거
+## 함께 만들기
 
-| 범위 | 상태 | 확인 자료 |
-|---|---|---|
-| 실제 스니펫 저장·자동 임베딩 | 완료 | [11월 5일 통합 검증](docs/INTEGRATION_TEST_2026-11-05.md) |
-| 의미 검색 API·VS Code UI 연결 | 완료 | [10월 28일 기록](docs/INTEGRATION_TEST_2026-10-28.md), [최종 통합 기록](docs/INTEGRATION_TEST_2026-11-05.md) |
-| 실패 시 원문 보존·같은 ID 재처리 | 완료 | [재처리 가이드와 검증](rag/README.md) |
-| 복사·삽입·원본 이동·빈 결과·검색 오류 표시 | 확인 | [최종 UI 검증](docs/INTEGRATION_TEST_2026-11-05.md) |
-| RAG 답변·Ask AI·기본 토큰 예산 | 첫 연결 확인 | [Context·출처 안내](rag/CONTEXT.md) |
-| 서버 검색 조건·필터 목록·Context 중복 제거 | 11/16 구현·API/DB 검사 | [11월 16일 검증](docs/EVALUATION_2026-11-16.md) |
+**Hazard & Stalls**의 4인 컴퓨터공학 캡스톤 프로젝트입니다. 사용 중 발견한 문제나 제안은 [Issues](https://github.com/GlancingMonkey/dev-memory-/issues)로 남겨 주세요.
 
-기존 CPU·10개 질문 실험에서 E5와 Qwen은 10/10, BGE는 9/10 Hit@1이었습니다. 현재 모델은 해당 조건의 정확도·속도·차원 균형을 근거로 채택한 intfloat/multilingual-e5-base입니다. 작은 표본의 결과이며 모든 코드와 질문에서 우수하다는 의미는 아닙니다. [비교 결과와 원본 산출물](rag/experiments/embedding_compare/comparison_results.md)을 보존합니다.
+[기여 안내](CONTRIBUTING.md) · [팀 개발 규칙](PROJECT_GUIDE.md) · [전체 문서](docs/README.md) · [릴리스 노트](CHANGELOG.md) · [후속 계획](docs/ROADMAP.md)
 
-## 기술과 저장소 구성
+| Extension | Backend | Database | RAG · Backend 지원 |
+|---|---|---|---|
+| [applecider2](https://github.com/applecider2) | [wanghaiwen05-ui](https://github.com/wanghaiwen05-ui) | [JeongSeungwan](https://github.com/JeongSeungwan) | [GlancingMonkey](https://github.com/GlancingMonkey) |
 
-| 영역 | 기술 | 위치 |
-|---|---|---|
-| Extension | TypeScript · VS Code API | [extension/](extension/) |
-| Backend | Python · FastAPI | [backend/](backend/) |
-| Database | PostgreSQL · pgvector | [database/](database/) |
-| Embedding | E5 · Sentence Transformers · CPU · 768차원 | [rag/](rag/) |
-| 개발환경 | Docker Compose · Dev Container · uv | [.devcontainer/](.devcontainer/) |
-| 검증·문서 | Python unittest · Extension 단위 테스트 · 통합 기록 | [테스트 안내](docs/TESTING.md), [문서 목차](docs/README.md) |
-
-DB 데이터는 각 개발 환경의 Docker volume에 저장됩니다. Git을 내려받는 것만으로 다른 PC의 스니펫 데이터와 원본 파일이 만들어지지는 않습니다.
-
-## 함께 개발하기
-
-담당 브랜치에서 작업하고 **PR base는 develop**으로 설정합니다. main은 발표·안정 버전용입니다. 최신 개발 문서를 찾을 때는 [develop](https://github.com/GlancingMonkey/dev-memory-/tree/develop)을 확인하세요.
-
-- [역할 분담·Git 작업 규칙](PROJECT_GUIDE.md)
-- [공식 요청·응답 계약](API_CONTRACT.md)
-- [다음 개발의 우선순위와 완료 기준](docs/ROADMAP.md)
-
-라이선스: [MIT](LICENSE).
+[MIT License](LICENSE) · © 2026 Hazard & Stalls
