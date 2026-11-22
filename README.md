@@ -9,7 +9,7 @@
 
 <p align="center">
   <a href="#시작하기">시작하기</a> ·
-  <a href="docs/DEMO.md">사용 흐름</a> ·
+  <a href="docs/USER_GUIDE.md">사진으로 따라 하기</a> ·
   <a href="docs/README.md">문서</a> ·
   <a href="CHANGELOG.md">릴리스 노트</a> ·
   <a href="https://github.com/GlancingMonkey/dev-memory-/issues">피드백</a>
@@ -37,15 +37,15 @@
       <p><strong>검색 범위</strong><br>일반 검색은 프로젝트·언어로 좁힐 수 있습니다.</p>
       <p><strong>원본 확인</strong><br>저장한 코드와 지금 파일의 내용·위치가 달라졌는지 표시하고 비교합니다.</p>
       <p><strong>개인 AI 키</strong><br>OpenAI·Claude·Gemini 키를 VS Code 비밀 저장소에 보관하고 AI 질문에 사용합니다.</p>
-      <p><a href="extension/README.md">기능과 단축키 살펴보기 →</a></p>
+      <p><a href="docs/USER_GUIDE.md">실제 화면으로 한 단계씩 따라 하기 →</a></p>
     </td>
     <td align="center" valign="top">
-      <img src="docs/images/integration-2026-11-18-gemini.png" width="330" alt="저장된 is_positive 코드로 만든 Gemini 답변과 S1 출처, 원본 파일 위치가 표시된 실제 Code Memory 화면">
+      <a href="docs/USER_GUIDE.md#8-ai에게-묻고-출처-확인하기"><img src="docs/images/guide/08-ai-answer-light.png" width="360" alt="밝은 테마의 실제 Code Memory 화면. add 함수의 AI 답변, S1 출처와 원본 코드가 함께 표시됨"></a>
     </td>
   </tr>
 </table>
 
-화면은 [11월 18일 실제 Gemini 연결 기록](docs/INTEGRATION_TEST_2026-11-18.md)입니다. 표시된 시간·토큰은 해당 호출의 관측값입니다. 현재 AI 질문은 일반 검색의 필터와 별도로 **전체 DB**를 대상으로 하며, 화면에서도 이 범위를 안내합니다.
+화면은 사용자가 2026년 11월 22일 Windows VS Code의 밝은 테마에서 직접 촬영한 OpenAI 답변입니다. [사진 가이드](docs/USER_GUIDE.md)에 저장부터 출처 확인까지 실제 화면 8장을 담았습니다. 표시된 시간·토큰은 해당 화면의 관측값이며, 현재 AI 질문은 일반 검색의 필터와 별도로 **전체 DB**를 대상으로 합니다.
 
 ## 시작하기
 
@@ -56,7 +56,7 @@
 | 1. 환경 준비 | [개발 가이드](docs/DEVELOPMENT.md)에서 Docker·Dev Container·DB 스키마·모델 준비 |
 | 2. Extension 실행 | [빌드와 확장 개발 호스트 열기](extension/README.md#빌드) |
 | 3. 실제 서버 연결 | [설정](extension/README.md#실제-api-설정)에서 `codeMemory.mock=false`와 Backend 주소 확인 |
-| 4. 첫 코드 저장·검색 | [시연 가이드](docs/DEMO.md)의 저장 → 검색 → 원본 열기 순서 실행 |
+| 4. 첫 코드 저장·검색 | [사진으로 따라 하기](docs/USER_GUIDE.md)의 저장 → 검색 → 원본 열기 → AI 질문 순서 실행 |
 
 환경과 DB 준비가 끝났다면 **Dev Container의 저장소 루트**에서 서버를 실행합니다.
 
