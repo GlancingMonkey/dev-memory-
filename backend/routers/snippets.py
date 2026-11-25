@@ -1,15 +1,17 @@
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Path
 from fastapi.responses import JSONResponse
 
 from backend.database import (
+    delete_snippet,
     get_snippet_embedding_state,
     insert_snippet,
     mark_snippet_embedding_failed,
     save_snippet_embedding,
 )
-from backend.schemas.snippet import SnippetCreateRequest
+from backend.schemas.snippet import SnippetCreateRequest, SnippetDeleteResponse
 from rag.embedding import EmbeddingInputError, embed_code
 
 router = APIRouter()
@@ -98,6 +100,25 @@ def _failure_response(
         return _saved_response(snippet_id, "failed", error_code)
 
     return _response_from_db(snippet_id, snippet)
+
+
+@router.delete("/snippets/{id}", response_model=SnippetDeleteResponse)
+def delete_snippet_endpoint(
+    id: Annotated[int, Path(ge=1, le=2**63 - 1)],
+) -> SnippetDeleteResponse:
+    try:
+        deleted = delete_snippet(id)
+    except Exception as error:
+        logger.error("Snippet deletion unavailable (%s)", type(error).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Snippet deletion unavailable",
+        ) from None
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Snippet not found")
+
+    return SnippetDeleteResponse(id=id)
 
 
 @router.post("/snippets")
