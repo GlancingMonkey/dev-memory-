@@ -957,23 +957,24 @@ export function validateKey(key: string): string | null {
 //    가장 앞(순위 높은) 하나로 묶는다. 웹페이지에 toString() 으로 넣으므로 이 함수 안에서만 끝나야 한다
 export function groupDuplicates<T extends { code?: string }>(results: T[]): { head: T; dups: T[] }[] {
   const groups: { head: T; dups: T[] }[] = [];
-  const byKey: Record<string, { head: T; dups: T[] }> = {};
+  // Map 을 쓴다 — 일반 객체면 코드가 "constructor"·"__proto__"·"toString" 일 때 상속 속성을 집어서 깨진다
+  const byKey = new Map<string, { head: T; dups: T[] }>();
   for (const r of results) {
     const key = String(r.code || '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/\s+$/, '')).join('\n').replace(/^\n+|\n+$/g, '');
-    const found = key ? byKey[key] : undefined;
+    const found = key ? byKey.get(key) : undefined;
     if (found) {
       found.dups.push(r);
     } else {
       const g = { head: r, dups: [] as T[] };
       groups.push(g);
-      if (key) { byKey[key] = g; }
+      if (key) { byKey.set(key, g); }
     }
   }
   return groups;
 }
 
 // ── 16. 저장 코드 삭제 — DELETE /snippets/{id}
-//    200·204 = 지움, 404 = 이미 없음(다른 사람이 지웠거나 다른 DB). 그 밖은 서버가 준 사유로 오류
+//    계약(#69): 200 {id, message} = 지움, 404 = 없는 ID·이미 지움, 422 = 잘못된 ID, 503 = 삭제 확인 실패
 export type DeleteOutcome = 'deleted' | 'missing';
 export function parseDeleteResponse(status: number, text: string): DeleteOutcome {
   if (status === 200 || status === 204) {
@@ -989,6 +990,12 @@ export function parseDeleteResponse(status: number, text: string): DeleteOutcome
     body = undefined;
   }
   const detail = errorDetailText(body) || text.slice(0, 200);
+  if (status === 422) {
+    throw new Error(`잘못된 ID 예요 (HTTP 422)${detail ? ': ' + detail : ''}`);
+  }
+  if (status === 503) {
+    throw new Error('서버가 삭제를 확인하지 못했어요 (HTTP 503). 다시 검색해서 남아 있는지 확인하세요.');
+  }
   if (status === 405) {
     throw new Error('서버에 아직 삭제 기능이 없어요 (HTTP 405). Backend 의 DELETE /snippets/{id} 가 필요해요.');
   }

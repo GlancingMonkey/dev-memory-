@@ -1045,6 +1045,13 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
       if (last) {
         await this.state.update(STATE_KEY, { ...last, results: last.results.filter((x) => x.id !== r.id) });
       }
+      // 지운 코드를 참고한 AI 답변은 저장해 둔 답에서 뺀다 (다시 물으면 새로 받음)
+      const cache = this.state.get<CachedAnswer[]>(ANSWER_CACHE_KEY, []);
+      const kept = cache.filter((c) => !(c.result.sources || []).some((src) => src.id === r.id));
+      if (kept.length !== cache.length) {
+        await this.state.update(ANSWER_CACHE_KEY, kept);
+        view.webview.postMessage({ type: 'recent', items: this.recentView(this.readRecent()) });
+      }
       view.webview.postMessage({ type: 'deleted', id: r.id, outcome });
       view.webview.postMessage({ type: 'history', items: history });
       vscode.window.setStatusBarMessage(outcome === 'missing' ? `Code Memory: id ${r.id} 는 이미 없어요` : `Code Memory: "${name}" (id ${r.id}) 삭제함`, 4000);
@@ -1568,6 +1575,8 @@ function getHtml(webview: vscode.Webview): string {
   .acts button:disabled { opacity: 0.4; background: transparent; }
   .acts button.done { color: var(--vscode-testing-iconPassed, #73c991); }
   .acts button.del { margin-left: auto; color: var(--vscode-errorForeground); }
+  .card.gone { opacity: 0.55; }
+  .gone-tag { margin-left: auto; padding: 3px 7px; font-size: 11.5px; color: var(--vscode-descriptionForeground); }
   .acts button.del:hover { background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent); }
 
   /* C. 간단히 보기 — 한 줄에 하나 */
@@ -2264,10 +2273,19 @@ function getHtml(webview: vscode.Webview): string {
         break;
       }
       case 'deleted': {
+        filterOpts = null;   // 프로젝트·언어 개수가 바뀌었을 수 있다 — 다음에 열 때 새로 받는다
+        vscode.postMessage({ type: 'loadFilters' });
         if (current) {
           current.results = current.results.filter(function (x) { return x.id !== msg.id; });
           renderResults();
         }
+        // AI 답변의 참고 코드 카드에 같은 코드가 있으면 "삭제됨"으로 (답변 글은 그대로 둔다)
+        answerBox.querySelectorAll('[data-del="' + msg.id + '"]').forEach(function (b) {
+          const c = b.closest('.card');
+          if (!c || c.classList.contains('gone')) { return; }
+          c.classList.add('gone');
+          b.replaceWith(el('span', 'gone-tag', msg.outcome === 'missing' ? '이미 없음' : 'DB 에서 삭제됨'));
+        });
         break;
       }
       case 'recent':

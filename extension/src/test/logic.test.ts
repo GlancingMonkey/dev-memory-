@@ -524,6 +524,13 @@ suite('groupDuplicates — 같은 코드 묶기', () => {
   test('들여쓰기나 내용이 다르면 따로', () => {
     assert.strictEqual(groupDuplicates([r(1, 'x = 1'), r(2, '  x = 1'), r(3, 'x = 2')]).length, 3);
   });
+  test('객체 기본 속성 이름 같은 코드도 깨지지 않음 (constructor·__proto__·toString)', () => {
+    for (const c of ['constructor', '__proto__', 'toString']) {
+      assert.strictEqual(groupDuplicates([r(1, c)]).length, 1, c + ' 단일');
+      const g = groupDuplicates([r(1, c), r(2, c)]);
+      assert.deepStrictEqual(g.map((x) => [x.head.id, x.dups.map((d) => d.id)]), [[1, [2]]], c + ' 중복');
+    }
+  });
   test('빈 코드는 묶지 않음', () => {
     assert.strictEqual(groupDuplicates([r(1, ''), r(2, '')]).length, 2);
   });
@@ -540,6 +547,10 @@ suite('parseDeleteResponse — 저장 코드 삭제 응답', () => {
   });
   test('404 는 이미 없음', () => {
     assert.strictEqual(parseDeleteResponse(404, '{"detail":"not found"}'), 'missing');
+  });
+  test('422 는 잘못된 ID, 503 은 삭제 확인 실패', () => {
+    assert.throws(() => parseDeleteResponse(422, '{"detail":"invalid id"}'), /잘못된 ID/);
+    assert.throws(() => parseDeleteResponse(503, ''), /확인하지 못했어요/);
   });
   test('405 는 서버에 기능 없음 안내', () => {
     assert.throws(() => parseDeleteResponse(405, '{"detail":"Method Not Allowed"}'), /DELETE \/snippets/);
