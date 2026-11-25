@@ -52,6 +52,24 @@ def insert_snippet(snippet: SnippetCreateRequest) -> int:
     return snippet_id
 
 
+def delete_snippet(snippet_id: int) -> bool:
+    """지정한 ID 한 행을 삭제하고 커밋이 확인된 뒤 결과를 반환한다."""
+    if type(snippet_id) is not int or not 1 <= snippet_id <= 2**63 - 1:
+        raise ValueError("snippet_id must be a positive BIGINT")
+
+    with connect_db() as connection:
+        row = connection.execute(
+            """
+            DELETE FROM public.snippets
+            WHERE id = %s
+            RETURNING id
+            """,
+            (snippet_id,),
+        ).fetchone()
+
+    return row is not None
+
+
 def search_snippets(
     query_vector: list[float],
     limit: int = 10,

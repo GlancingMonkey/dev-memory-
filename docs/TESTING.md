@@ -48,8 +48,9 @@ npm.cmd run compile
 |---|---|
 | [manual_embedding_input_search_check.py](../tests/manual_embedding_input_search_check.py) | 긴 입력 저장 요청으로 시험 행을 추가하고 기존 검색 대상·원문 보존을 확인 |
 | [manual_retry_embedding_check.py](../tests/manual_retry_embedding_check.py) | 선택한 기존 행에 생성 실패를 모의한 뒤 실제 E5로 같은 ID를 복구 |
+| [manual_snippet_delete_check.py](../tests/manual_snippet_delete_check.py) | 새 시험 DB 안에서만 저장·삭제·검색/필터를 검사하고 시험 DB 제거. 기존 DB는 전후 읽기 대조 |
 
-두 파일은 일반 단위 테스트에 자동으로 포함되지 않습니다. 실행 전 파일의 인자·조건과 대상 개발 DB를 확인합니다. 재처리 검사의 실행 방법은 [RAG 안내](../rag/README.md)를 따릅니다. 이미 벡터가 있는 행을 시험하기 위해 지우지 않습니다.
+위 파일은 일반 단위 테스트에 자동으로 포함되지 않습니다. 실행 전 파일의 인자·조건과 대상 개발 DB를 확인합니다. 재처리 검사의 실행 방법은 [RAG 안내](../rag/README.md)를, 격리 DB 삭제 검사는 [스니펫 삭제 안내](SNIPPET_DELETION.md)를 따릅니다. 기존 DB에 이미 있는 벡터를 시험하기 위해 지우지 않습니다.
 
 입력 한도 검사 파일은 내부 `NORMAL_PAYLOAD`와 **줄바꿈까지 일치하는** 기존 ready 행을 찾습니다. 현재 값은 LF 줄바꿈의 safe_divide 예시이므로 Windows에서 저장한 CRLF 행은 동일 대상으로 간주되지 않을 수 있습니다. 조건이 맞지 않으면 기존 파일·행을 바꾸기 전에 시험 준비 방법부터 확인합니다.
 

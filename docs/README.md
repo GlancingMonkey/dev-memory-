@@ -21,6 +21,7 @@
 | 18일 담당별 연결·재현·남은 확인 | [역할별 인수인계](HANDOFF_2026-11-18.md) |
 | Extension 개인 OpenAI·Claude·Gemini 키 연결 | [사용자 AI 키 안내](PERSONAL_LLM_KEYS.md) |
 | API 요청·응답과 오류 규칙 확인 | [공식 API 계약](../API_CONTRACT.md) |
+| 스니펫 삭제 API와 Extension 연결 | [삭제 계약·인수인계·격리 DB 검사](SNIPPET_DELETION.md) |
 | 기존 스니펫의 임베딩 재처리 | [RAG 재처리 안내](../rag/README.md) |
 | 단위 테스트와 실제 DB 시험 구분 | [테스트 안내](TESTING.md) |
 | 담당 영역·브랜치·PR 규칙 확인 | [팀 개발 규칙](../PROJECT_GUIDE.md) |

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -11,3 +11,8 @@ class SnippetCreateRequest(BaseModel):
     start_line: int
     end_line: int
     code: str
+
+
+class SnippetDeleteResponse(BaseModel):
+    id: int
+    message: Literal["snippet deleted"] = "snippet deleted"
