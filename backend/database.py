@@ -284,17 +284,3 @@ def get_filter_options() -> dict[str, list[dict]]:
             "count": row["count"],
         })
     return options
-
-
-def delete_snippet(snippet_id: int) -> bool:
-    """지정한 ID 한 건을 삭제하고, 실제 삭제 여부를 반환한다."""
-    if type(snippet_id) is not int or snippet_id <= 0:
-        raise ValueError("snippet_id must be a positive integer")
-
-    with connect_db() as connection:
-        row = connection.execute(
-            "DELETE FROM public.snippets WHERE id = %s RETURNING id",
-            (snippet_id,),
-        ).fetchone()
-
-    return row is not None
