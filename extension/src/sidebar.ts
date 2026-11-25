@@ -4,7 +4,7 @@ import {
   addUsage, answerToMarkdown, askCacheKey, AskError, askErrorFor, AskResponse, AskSource, AskTurn, buildAskRequest, buildSearchUrl,
   canSendKey, checkAppliedFilter, clamp, compareSource, guessProvider, LLM_KEY_HEADER, LLM_PROVIDER_HEADER, LLM_PROVIDERS,
   LlmProvider, maskKey, validateKey, pickSymbol, SimpleSymbol, SourceState, EmbeddingStatus, endsWithQuestionMark, errorDetailText, FILTER_MAX_LENGTH, FilterCheck, filterLocally,
-  FilterOptions, hasFilter, isVagueQuestion, localDateKey, looksLikeQuestion, normalizeFilter, parseAskResponse, parseFilterOptions,
+  FilterOptions, groupDuplicates, hasFilter, parseDeleteResponse, DeleteOutcome, isVagueQuestion, localDateKey, looksLikeQuestion, normalizeFilter, parseAskResponse, parseFilterOptions,
   parseSse, reindent, SearchFilter, todayUsage, UsageDay,
 } from './logic';
 
@@ -87,9 +87,44 @@ const MOCK_SAMPLES: SearchResult[] = [
 
 // mock 샘플은 원본 열기·원본 비교를 시험할 수 있게, 열린 폴더가 있으면 기본 샘플(mvp-save-test)을 그 폴더 이름으로 바꿔서 쓴다
 //   (예: 열린 폴더에 sample.py 가 있으면 add 샘플의 원본으로 잡힌다). 실제 서버 모드와는 상관없다
+// mock 에서도 "같은 코드 묶기"가 보이게 — add 를 두 번 더 저장한 것처럼 (코드가 똑같은 다른 id)
+const MOCK_DUPLICATES: { after: number; id: number; score: number }[] = [
+  { after: 3, id: 6, score: 0.75 },
+  { after: 5, id: 7, score: 0.62 },
+];
+// mock 에서 지운 id — 창을 다시 열면 샘플이 돌아온다
+const mockDeleted = new Set<number>();
 function mockResults(): SearchResult[] {
   const folder = vscode.workspace.workspaceFolders?.[0]?.name;
-  return MOCK_SAMPLES.map((r) => (folder && r.project_name === 'mvp-save-test' ? { ...r, project_name: folder } : r));
+  const rows = MOCK_SAMPLES.map((r) => (folder && r.project_name === 'mvp-save-test' ? { ...r, project_name: folder } : r));
+  const add = rows[0];
+  for (const d of [...MOCK_DUPLICATES].reverse()) {
+    rows.splice(d.after, 0, { ...add, id: d.id, score: d.score });
+  }
+  return rows.filter((r) => !mockDeleted.has(r.id));
+}
+
+// 저장 코드 삭제 — DELETE /snippets/{id} (단건). 임베딩은 같은 행이라 같이 지워진다
+export async function deleteSnippet(id: number): Promise<DeleteOutcome> {
+  const config = vscode.workspace.getConfiguration('codeMemory');
+  if (config.get<boolean>('mock', true)) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const had = mockResults().some((r) => r.id === id);
+    mockDeleted.add(id);
+    return had ? 'deleted' : 'missing';
+  }
+  const baseUrl = config.get<string>('apiUrl', 'http://localhost:8000').replace(/\/+$/, '');
+  const timeoutSec = clamp(config.get<number>('searchTimeoutSeconds'), 1, 300, 10);
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}/snippets/${encodeURIComponent(String(id))}`, { method: 'DELETE', signal: AbortSignal.timeout(timeoutSec * 1000) });
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error(`응답 시간 초과 (${timeoutSec}초). 지워졌는지 다시 검색해서 확인하세요.`);
+    }
+    throw new Error(`서버에 연결할 수 없습니다 (${baseUrl})`);
+  }
+  return parseDeleteResponse(res.status, await res.text());
 }
 
 // ─────────────────────────────────────────────
@@ -473,6 +508,9 @@ type FromWebview =
   | { type: 'clearRecent' }
   | { type: 'clearLast' }
   | { type: 'clearHistory' }
+  | { type: 'removeRecent'; q: string; ai: boolean }
+  | { type: 'deleteSnippet'; result: SearchResult }
+  | { type: 'removeHistory'; time: string; id?: number }
   | { type: 'copyText'; text: string }
   | { type: 'prefs'; prefs: UiPrefs }
   | { type: 'switchMode' }
@@ -978,6 +1016,51 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
     return items.map((r) => ({ ...r, cached: r.ai && !!this.findCache(r.q) }));
   }
 
+  // 저장 코드 삭제 — 확인창 → DELETE /snippets/{id} → 결과·저장 기록·마지막 검색에서 뺀다
+  private async deleteSaved(r: SearchResult): Promise<void> {
+    const view = this.view;
+    if (!view || typeof r.id !== 'number') {
+      return;
+    }
+    const name = r.function_name || r.file_path.split('/').pop() || '코드';
+    const mock = vscode.workspace.getConfiguration('codeMemory').get<boolean>('mock', true);
+    const pick = await vscode.window.showWarningMessage(
+      `"${name}" (id ${r.id}) 를 DB 에서 삭제할까요?`,
+      {
+        modal: true,
+        detail: `${r.file_path} : ${r.start_line}–${r.end_line} · ${r.project_name || '-'}\n`
+          + (mock ? 'mock 모드라서 화면 샘플에서만 빠져요.' : '삭제하면 되돌릴 수 없어요. 이 DB 에서만 지워지고 팀원 DB 에는 남아 있어요.'),
+      },
+      '삭제',
+    );
+    if (pick !== '삭제') {
+      return;
+    }
+    view.webview.postMessage({ type: 'deleting', id: r.id });
+    try {
+      const outcome = await deleteSnippet(r.id);
+      const history = this.state.get<SaveRecord[]>(HISTORY_KEY, []).filter((h) => h.id !== r.id);
+      await this.state.update(HISTORY_KEY, history);
+      const last = this.state.get<SavedSearch>(STATE_KEY);
+      if (last) {
+        await this.state.update(STATE_KEY, { ...last, results: last.results.filter((x) => x.id !== r.id) });
+      }
+      // 지운 코드를 참고한 AI 답변은 저장해 둔 답에서 뺀다 (다시 물으면 새로 받음)
+      const cache = this.state.get<CachedAnswer[]>(ANSWER_CACHE_KEY, []);
+      const kept = cache.filter((c) => !(c.result.sources || []).some((src) => src.id === r.id));
+      if (kept.length !== cache.length) {
+        await this.state.update(ANSWER_CACHE_KEY, kept);
+        view.webview.postMessage({ type: 'recent', items: this.recentView(this.readRecent()) });
+      }
+      view.webview.postMessage({ type: 'deleted', id: r.id, outcome });
+      view.webview.postMessage({ type: 'history', items: history });
+      vscode.window.setStatusBarMessage(outcome === 'missing' ? `Code Memory: id ${r.id} 는 이미 없어요` : `Code Memory: "${name}" (id ${r.id}) 삭제함`, 4000);
+    } catch (err) {
+      view.webview.postMessage({ type: 'deleting', id: r.id, failed: true });
+      void vscode.window.showErrorMessage(`삭제하지 못했어요: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // 저장 시도 한 건을 기록 (패널 아래 "저장 기록" + 패널 안 알림)
   public async addSaveRecord(record: SaveRecord): Promise<void> {
     const items = [record, ...this.state.get<SaveRecord[]>(HISTORY_KEY, [])].slice(0, HISTORY_MAX);
@@ -1032,6 +1115,7 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
         askTimeout: clamp(config.get<number>('askTimeoutSeconds'), 1, 300, 45),
         askOnQuestionMark: config.get<boolean>('askOnQuestionMark', true),
         reviewAfterDays: clamp(config.get<number>('reviewAfterDays'), 0, 365, 7),
+        groupDuplicates: config.get<boolean>('groupDuplicates', true),
       });
     };
     const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
@@ -1243,6 +1327,23 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
           await this.state.update(STATE_KEY, undefined);
           break;
         }
+        case 'removeRecent': {
+          const items = this.readRecent().filter((r) => !(r.q === msg.q && r.ai === !!msg.ai));
+          await this.state.update(RECENT_KEY, items);
+          view.webview.postMessage({ type: 'recent', items: this.recentView(items) });
+          break;
+        }
+        case 'deleteSnippet': {
+          await this.deleteSaved(msg.result);
+          break;
+        }
+        case 'removeHistory': {
+          // 내 PC 기록에서 그 줄만 뺀다. DB 의 코드는 그대로
+          const items = this.state.get<SaveRecord[]>(HISTORY_KEY, []).filter((h) => !(h.time === msg.time && h.id === msg.id));
+          await this.state.update(HISTORY_KEY, items);
+          view.webview.postMessage({ type: 'history', items });
+          break;
+        }
         case 'clearHistory': {
           await this.state.update(HISTORY_KEY, []);
           view.webview.postMessage({ type: 'history', items: [] });
@@ -1341,6 +1442,10 @@ function getHtml(webview: vscode.Webview): string {
   .recent-item .rcached { flex: none; margin-left: 8px; font-size: 10.5px; color: var(--vscode-descriptionForeground); }
   .recent-item:hover { background: var(--vscode-list-hoverBackground); }
   .recent-item.active { color: var(--vscode-list-activeSelectionForeground); background: var(--vscode-list-activeSelectionBackground); }
+  .xbtn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-left: 4px; padding: 0;
+          border: 0; border-radius: 3px; background: none; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1; opacity: 0.45; cursor: pointer; }
+  .recent-item:hover .xbtn, .recent-item.active .xbtn, .hrow:hover .xbtn, .rv-wrap:hover .xbtn, .xbtn:focus-visible { opacity: 1; }
+  .xbtn:hover { background: var(--vscode-toolbar-hoverBackground, #ffffff1f); color: var(--vscode-foreground); }
 
   /* 요약줄: 결과 수 · 자세히/간단히 · 기록 복사 · 지우기 */
   .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; min-height: 22px; margin: 0 0 4px; font-size: 11px; color: var(--vscode-descriptionForeground); }
@@ -1433,7 +1538,9 @@ function getHtml(webview: vscode.Webview): string {
              background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 10%, transparent); }
   .tag { margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 10.5px; white-space: nowrap;
          color: var(--vscode-editorWarning-foreground);
+         background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 12%, transparent);
          border: 1px solid color-mix(in srgb, var(--vscode-editorWarning-foreground) 50%, transparent); }
+  .tag:hover { background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 24%, transparent); }
   .sub { display: flex; align-items: center; gap: 5px; margin: 1px 0 6px 28px; font-size: 11px; color: var(--vscode-descriptionForeground);
          overflow: hidden; white-space: nowrap; }
   .sub span:last-child { overflow: hidden; text-overflow: ellipsis; }
@@ -1467,6 +1574,10 @@ function getHtml(webview: vscode.Webview): string {
   .acts button:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
   .acts button:disabled { opacity: 0.4; background: transparent; }
   .acts button.done { color: var(--vscode-testing-iconPassed, #73c991); }
+  .acts button.del { margin-left: auto; color: var(--vscode-errorForeground); }
+  .card.gone { opacity: 0.55; }
+  .gone-tag { margin-left: auto; padding: 3px 7px; font-size: 11.5px; color: var(--vscode-descriptionForeground); }
+  .acts button.del:hover { background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent); }
 
   /* C. 간단히 보기 — 한 줄에 하나 */
   .card.compact { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; margin: 1px 0; cursor: pointer; }
@@ -1624,6 +1735,19 @@ function getHtml(webview: vscode.Webview): string {
   .rv:hover { background: var(--vscode-list-hoverBackground); }
   .rv-name { font-family: var(--vscode-editor-font-family); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rv-meta { margin-left: auto; flex: none; font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
+  .rv-wrap { display: flex; align-items: center; border-radius: 4px; }
+  .rv-wrap:hover { background: var(--vscode-list-hoverBackground); }
+  .rv-wrap .rv { flex: 1; min-width: 0; }
+  .rv-wrap .rv:hover { background: transparent; }
+  /* 같은 코드 묶음 */
+  .dup { display: flex; align-items: center; gap: 6px; margin: 6px 0 0 28px; padding: 3px 8px; border-radius: 4px; font-size: 11.5px;
+         border: 1px dashed color-mix(in srgb, var(--vscode-descriptionForeground) 50%, transparent); color: var(--vscode-descriptionForeground); }
+  .dup b { color: var(--vscode-foreground); font-weight: 600; }
+  .dup .dids { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dup .link-btn { margin-left: auto; flex: none; font-size: 11.5px; }
+  .card.dupc { margin-left: 14px; padding-left: 8px; border-left: 2px solid color-mix(in srgb, var(--vscode-descriptionForeground) 35%, transparent); }
+  .dupn { flex: none; padding: 0 5px; border-radius: 8px; font-size: 10.5px; border: 1px dashed color-mix(in srgb, var(--vscode-descriptionForeground) 60%, transparent);
+          color: var(--vscode-descriptionForeground); background: none; cursor: pointer; }
 
   /* 시연 모드 */
   .demo { margin: 4px 0 10px; padding: 8px 10px; border-radius: 6px; font-size: 12px;
@@ -1822,6 +1946,7 @@ function getHtml(webview: vscode.Webview): string {
   const endsWithQuestionMark = ${endsWithQuestionMark.toString()};
   const looksLikeQuestion = ${looksLikeQuestion.toString()};
   const isVagueQuestion = ${isVagueQuestion.toString()};
+  const groupDuplicates = ${groupDuplicates.toString()};
   const answerToMarkdown = ${answerToMarkdown.toString()};
 
   const MAX_LINES = 6;   // 이보다 긴 코드는 접어서 보여준다
@@ -1857,6 +1982,7 @@ function getHtml(webview: vscode.Webview): string {
     folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
     code: ['M8 7l-5 5 5 5', 'M16 7l5 5-5 5'],
     chevdown: ['M6 9l6 6 6-6'],
+    trash: ['M4 7h16', 'M10 11v6', 'M14 11v6', 'M6 7l1 13h10l1-13', 'M9 7V4h6v3'],
   };
 
   // ── 상태
@@ -1866,6 +1992,7 @@ function getHtml(webview: vscode.Webview): string {
   let mode = { mock: true, apiUrl: '' };
   let prefs = { view: 'full', historyOpen: false, askHintSeen: false };
   let recentItems = [];
+  let dupOpen = {};   // 같은 코드 묶음 펼침 상태 — 검색마다 새로
   let activeIdx = -1;        // 키보드 ↑↓ 로 고른 최근 검색어 위치
   let historyItems = [];
   let toastTimer = 0;
@@ -1994,7 +2121,7 @@ function getHtml(webview: vscode.Webview): string {
     recentBox.replaceChildren();
     if (!recentItems.length) { recentBox.hidden = true; return; }
     const head = el('div', 'recent-head');
-    const clear = el('button', 'link-btn', '지우기');
+    const clear = el('button', 'link-btn', '전체 지우기');
     clear.type = 'button';
     clear.addEventListener('mousedown', function (e) { e.preventDefault(); vscode.postMessage({ type: 'clearRecent' }); });
     head.append(el('span', '', '최근 검색'), clear);
@@ -2004,11 +2131,29 @@ function getHtml(webview: vscode.Webview): string {
       if (r.ai) { item.append(el('span', 'rtag', '✦')); }
       item.append(el('span', 'rq', r.q));
       if (r.cached) { item.append(el('span', 'rcached', '답변 저장됨')); }
+      const x = xButton('이 검색어만 지우기 (Delete)', function () { removeRecent(r); });
+      x.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); removeRecent(r); });
+      item.append(x);
       item.title = r.cached ? '저장된 답변 바로 보기 (AI를 다시 부르지 않음)' : r.ai ? 'AI 질문으로 다시 묻기' : '다시 검색';
       // mousedown: 검색창 blur(닫힘)보다 먼저 처리되게
       item.addEventListener('mousedown', function (e) { e.preventDefault(); pickRecent(r); });
       recentBox.append(item);
     });
+  }
+  // ✕ 버튼 — 줄을 누른 것과 따로 처리
+  function xButton(title, onClick) {
+    const x = el('button', 'xbtn', '✕');
+    x.type = 'button';
+    x.title = title;
+    x.setAttribute('aria-label', title);
+    x.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); onClick(); });
+    return x;
+  }
+  function removeRecent(r) {
+    recentItems = recentItems.filter(function (x) { return !(x.q === r.q && !!x.ai === !!r.ai); });
+    activeIdx = Math.min(activeIdx, recentItems.length - 1);
+    renderRecent();
+    vscode.postMessage({ type: 'removeRecent', q: r.q, ai: !!r.ai });
   }
   function openRecent() {
     if (!recentItems.length) { return; }
@@ -2042,6 +2187,7 @@ function getHtml(webview: vscode.Webview): string {
     else if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, recentItems.length - 1); renderRecent(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, -1); renderRecent(); }
     else if (e.key === 'Enter' && activeIdx >= 0) { e.preventDefault(); pickRecent(recentItems[activeIdx]); }
+    else if (e.key === 'Delete' && activeIdx >= 0) { e.preventDefault(); removeRecent(recentItems[activeIdx]); }
     else if (e.key === 'Escape') { e.preventDefault(); closeRecent(); }
   });
 
@@ -2100,8 +2246,9 @@ function getHtml(webview: vscode.Webview): string {
     switch (msg.type) {
       case 'config':
         mode = { mock: !!msg.mock, apiUrl: msg.apiUrl || '', askTimeout: msg.askTimeout || 45, askOnQuestionMark: msg.askOnQuestionMark !== false,
-          reviewAfterDays: typeof msg.reviewAfterDays === 'number' ? msg.reviewAfterDays : 7 };
+          reviewAfterDays: typeof msg.reviewAfterDays === 'number' ? msg.reviewAfterDays : 7, groupDuplicates: msg.groupDuplicates !== false };
         renderReview();
+        if (current) { renderResults(); }
         banner.hidden = !msg.mock;
         updateMode();
         updateAskHint();
@@ -2118,6 +2265,29 @@ function getHtml(webview: vscode.Webview): string {
         renderHistory();
         if (current) { renderResults(); }
         break;
+      case 'deleting': {
+        list.querySelectorAll('[data-del="' + msg.id + '"]').forEach(function (b) {
+          b.disabled = !msg.failed;
+          b.lastChild.textContent = msg.failed ? '삭제' : '삭제 중…';
+        });
+        break;
+      }
+      case 'deleted': {
+        filterOpts = null;   // 프로젝트·언어 개수가 바뀌었을 수 있다 — 다음에 열 때 새로 받는다
+        vscode.postMessage({ type: 'loadFilters' });
+        if (current) {
+          current.results = current.results.filter(function (x) { return x.id !== msg.id; });
+          renderResults();
+        }
+        // AI 답변의 참고 코드 카드에 같은 코드가 있으면 "삭제됨"으로 (답변 글은 그대로 둔다)
+        answerBox.querySelectorAll('[data-del="' + msg.id + '"]').forEach(function (b) {
+          const c = b.closest('.card');
+          if (!c || c.classList.contains('gone')) { return; }
+          c.classList.add('gone');
+          b.replaceWith(el('span', 'gone-tag', msg.outcome === 'missing' ? '이미 없음' : 'DB 에서 삭제됨'));
+        });
+        break;
+      }
       case 'recent':
         recentItems = (msg.items || []).map(function (r) { return typeof r === 'string' ? { q: r, ai: false } : r; });
         if (!recentBox.hidden) { renderRecent(); }
@@ -2427,7 +2597,9 @@ function getHtml(webview: vscode.Webview): string {
       row.append(el('span', 'rv-name', name), el('span', 'rv-meta', String(h.file_path || '').split('/').pop() + ' · ' + (d < 1 ? '오늘' : d + '일 전') + ' 저장'));
       row.title = '"' + name + '" 검색해서 다시 보기';
       row.addEventListener('click', function () { markSeen(h.function_name, h.file_path); search(name); });
-      reviewBox.append(row);
+      const wrap = el('div', 'rv-wrap');
+      wrap.append(row, xButton('목록에서 빼기 (다시 저장하면 다시 나와요)', function () { markSeen(h.function_name, h.file_path); }));
+      reviewBox.append(wrap);
     });
   }
 
@@ -2486,6 +2658,7 @@ function getHtml(webview: vscode.Webview): string {
   }
 
   function setResults(query, results, restored, usedFilter, check) {
+    dupOpen = {};
     current = {
       query: query, restored: restored, filter: normFilter(usedFilter), check: check || 'none',
       results: results.map(function (r, i) { return Object.assign({ rank: i + 1 }, r); }),
@@ -2684,20 +2857,44 @@ function getHtml(webview: vscode.Webview): string {
     }
     tools.hidden = false;
     const rows = visibleResults();
-    let text = rows.length + '개';
+    const groups = mode.groupDuplicates === false ? rows.map(function (r) { return { head: r, dups: [] }; }) : groupDuplicates(rows);
+    const folded = rows.length - groups.length;
+    let text = groups.length + '개' + (folded ? ' · 같은 코드 ' + folded + '개 접음' : '');
     // mock 결과는 검색어와 상관없는 샘플 — 짧게, 자세한 설명은 마우스 올리면
     if (mode.mock) { text = 'mock ' + text; }
     setSummary(current.query, text,
       (current.restored ? '지난 검색 결과입니다. ' : '') + (mode.mock ? 'mock 모드라서 검색어와 상관없이 같은 샘플이 나옵니다' : ''), scope);
 
-    rows.forEach(function (r, i) {
+    let i = 0;
+    groups.forEach(function (g, gi) {
+      const open = g.dups.length > 0 && !!dupOpen[dupKey(g.head)];
       if (prefs.view === 'compact') {
-        list.append(compactRow(r, i));
+        list.append(compactRow(g.head, i++, g));
+        if (open) { g.dups.forEach(function (d) { const c = compactRow(d, i++); c.classList.add('dupc'); list.append(c); }); }
       } else {
-        if (i > 0) { list.append(el('div', 'divider')); }
-        list.append(card(r, i));
+        if (gi > 0) { list.append(el('div', 'divider')); }
+        list.append(card(g.head, i++, g));
+        if (open) { g.dups.forEach(function (d) { const c = card(d, i++); c.classList.add('dupc'); list.append(c); }); }
       }
     });
+  }
+  function dupKey(r) { return String(r.id) + '|' + r.rank; }
+  function toggleDup(g) {
+    const k = dupKey(g.head);
+    dupOpen[k] = !dupOpen[k];
+    renderResults();
+  }
+  function dupLine(g) {
+    const box = el('div', 'dup');
+    const ids = g.dups.map(function (d) { return d.id; });
+    box.append(el('span', '', '⧉'), el('b', '', '같은 코드 ' + g.dups.length + '개 더'),
+      el('span', 'dids', '· id ' + ids.slice(0, 3).join(', ') + (ids.length > 3 ? ' …' : '')));
+    box.title = '코드 내용이 똑같은 저장본 (id ' + ids.join(', ') + ')';
+    const t = el('button', 'link-btn', dupOpen[dupKey(g.head)] ? '접기' : '펼치기');
+    t.type = 'button';
+    t.addEventListener('click', function () { toggleDup(g); });
+    box.append(t);
+    return box;
   }
 
   // F-2. 범위 때문에 결과 없음 — 조건을 풀어서 바로 다시
@@ -2793,7 +2990,7 @@ function getHtml(webview: vscode.Webview): string {
   }
 
   // 자세히 보기 카드
-  function card(r, i) {
+  function card(r, i, g) {
     const c = el('div', r.rank === 1 ? 'card top' : 'card');
     const info = locInfo(r);
 
@@ -2867,12 +3064,20 @@ function getHtml(webview: vscode.Webview): string {
       c.append(more);
     }
 
+    if (g && g.dups.length) { c.append(dupLine(g)); }
     const acts = el('div', 'acts');
     const openBtn = action('open', info.canOpen ? '원본 열기' : '위치 연결', function () { openResult(r); });
     if (!info.canOpen) { openBtn.title = info.why; }
     const copyBtn = action('copy', '복사', function () { copyCode(r, copyBtn); });
     acts.append(openBtn, action('insert', '삽입', function () { insertCode(r); }), copyBtn,
       action('diff', '비교', function () { compareResult(r); }));
+    if (typeof r.id === 'number') {
+      const delBtn = action('trash', '삭제', function () { vscode.postMessage({ type: 'deleteSnippet', result: r }); });
+      delBtn.classList.add('del');
+      delBtn.title = 'DB 에서 이 코드 삭제 (확인 후)';
+      delBtn.dataset.del = String(r.id);
+      acts.append(delBtn);
+    }
     c.append(acts);
 
     keyboard(c, r, i, true, function () { copyBtn.click(); });
@@ -2880,13 +3085,20 @@ function getHtml(webview: vscode.Webview): string {
   }
 
   // C. 간단히 보기 — 한 줄
-  function compactRow(r, i) {
+  function compactRow(r, i, g) {
     const info = locInfo(r);
     const c = el('div', 'card compact' + (r.rank === 1 ? ' top' : '') + (info.canOpen ? '' : ' off'));
     const where = el('span', info.canOpen ? 'where ok' : 'where', info.oldWhere ? r.file_path + ' : ' + info.where : info.where);
     c.append(el('span', 'rank', String(r.rank)), langDot(r.language), el('span', 'name', nameOf(r)), where);
     if (r.source === 'moved') { c.append(srcTag('i', '이동', '위치 이동: ' + r.moved_start + '–' + r.moved_end + '줄')); }
     if (r.source === 'changed') { c.append(srcTag('w', '바뀜', '저장한 코드와 지금 파일 내용이 달라요')); }
+    if (g && g.dups.length) {
+      const n = el('button', 'dupn', '+' + g.dups.length);
+      n.type = 'button';
+      n.title = '같은 코드 ' + g.dups.length + '개 더 — 눌러서 ' + (dupOpen[dupKey(g.head)] ? '접기' : '펼치기');
+      n.addEventListener('click', function (e) { e.stopPropagation(); toggleDup(g); });
+      c.append(n);
+    }
     c.append(simEl(r));
     c.title = (info.canOpen ? '눌러서 원본 열기' : info.why) + ' · ↑↓ 이동 · C 복사 · I 삽입 · D 비교 · Esc 검색창';
     c.addEventListener('click', function () { openResult(r); });
@@ -2983,7 +3195,12 @@ function getHtml(webview: vscode.Webview): string {
         mp.title = '저장 전에 비밀값 ' + h.masked + '개를 가렸어요';
         row.append(mp);
       }
-      row.append(pill);
+      row.append(pill, xButton('이 기록만 지우기 (DB 의 코드는 그대로)', function () {
+        historyItems = historyItems.filter(function (x) { return x !== h; });
+        renderHistory();
+        renderReview();
+        vscode.postMessage({ type: 'removeHistory', time: h.time, id: h.id });
+      }));
       row.title = '눌러서 "' + name + '" 검색' + (h.error ? ' — ' + h.error : '');
       row.addEventListener('click', function () { input.value = name; search(name); });
       histBody.append(row);

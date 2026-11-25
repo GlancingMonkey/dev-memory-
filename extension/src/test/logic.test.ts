@@ -1,7 +1,7 @@
 // logic.ts 단위 테스트 — VS Code 없이 돌아간다: npm run test:unit
 import * as assert from 'assert';
 import {
-  addUsage, adjustEndLine, canSendKey, guessProvider, maskKey, validateKey, evalToCsv, evalToMarkdown, EvalRow, parseEvalQuestions, rankOf, summarizeEval, compareSource, maskSecrets, scanSecrets, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
+  addUsage, adjustEndLine, groupDuplicates, parseDeleteResponse, canSendKey, guessProvider, maskKey, validateKey, evalToCsv, evalToMarkdown, EvalRow, parseEvalQuestions, rankOf, summarizeEval, compareSource, maskSecrets, scanSecrets, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
 } from '../logic';
 
 const linesOf = (src: string) => {
@@ -509,3 +509,53 @@ function parseAskErrKind(status: number): string {
   }
   return '';
 }
+
+suite('groupDuplicates — 같은 코드 묶기', () => {
+  const r = (id: number, code: string) => ({ id, code });
+  test('같은 코드는 앞의 것 하나로 묶고 순서 유지', () => {
+    const g = groupDuplicates([r(41, 'def a():\n  return 1'), r(39, 'def b(): pass'), r(40, 'def a():\n  return 1')]);
+    assert.deepStrictEqual(g.map((x) => [x.head.id, x.dups.map((d) => d.id)]), [[41, [40]], [39, []]]);
+  });
+  test('줄바꿈 종류·줄 끝 공백·앞뒤 빈 줄은 무시', () => {
+    const g = groupDuplicates([r(1, 'x = 1\ny = 2'), r(2, '\nx = 1  \r\ny = 2\n\n')]);
+    assert.strictEqual(g.length, 1);
+    assert.strictEqual(g[0].dups.length, 1);
+  });
+  test('들여쓰기나 내용이 다르면 따로', () => {
+    assert.strictEqual(groupDuplicates([r(1, 'x = 1'), r(2, '  x = 1'), r(3, 'x = 2')]).length, 3);
+  });
+  test('객체 기본 속성 이름 같은 코드도 깨지지 않음 (constructor·__proto__·toString)', () => {
+    for (const c of ['constructor', '__proto__', 'toString']) {
+      assert.strictEqual(groupDuplicates([r(1, c)]).length, 1, c + ' 단일');
+      const g = groupDuplicates([r(1, c), r(2, c)]);
+      assert.deepStrictEqual(g.map((x) => [x.head.id, x.dups.map((d) => d.id)]), [[1, [2]]], c + ' 중복');
+    }
+  });
+  test('빈 코드는 묶지 않음', () => {
+    assert.strictEqual(groupDuplicates([r(1, ''), r(2, '')]).length, 2);
+  });
+  test('웹페이지에 넣을 수 있게 혼자 돌아감', () => {
+    const fn = new Function('return ' + groupDuplicates.toString())() as typeof groupDuplicates;
+    assert.strictEqual(fn([r(1, 'a'), r(2, 'a')]).length, 1);
+  });
+});
+
+suite('parseDeleteResponse — 저장 코드 삭제 응답', () => {
+  test('200·204 는 지움', () => {
+    assert.strictEqual(parseDeleteResponse(204, ''), 'deleted');
+    assert.strictEqual(parseDeleteResponse(200, '{"deleted":true}'), 'deleted');
+  });
+  test('404 는 이미 없음', () => {
+    assert.strictEqual(parseDeleteResponse(404, '{"detail":"not found"}'), 'missing');
+  });
+  test('422 는 잘못된 ID, 503 은 삭제 확인 실패', () => {
+    assert.throws(() => parseDeleteResponse(422, '{"detail":"invalid id"}'), /잘못된 ID/);
+    assert.throws(() => parseDeleteResponse(503, ''), /확인하지 못했어요/);
+  });
+  test('405 는 서버에 기능 없음 안내', () => {
+    assert.throws(() => parseDeleteResponse(405, '{"detail":"Method Not Allowed"}'), /DELETE \/snippets/);
+  });
+  test('그 밖은 서버 사유를 붙여 오류', () => {
+    assert.throws(() => parseDeleteResponse(500, '{"detail":{"code":"db","message":"DB 연결 실패"}}'), /HTTP 500.*DB 연결 실패/);
+  });
+});
