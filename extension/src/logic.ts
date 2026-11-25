@@ -972,6 +972,29 @@ export function groupDuplicates<T extends { code?: string }>(results: T[]): { he
   return groups;
 }
 
+// ── 16. 저장 코드 삭제 — DELETE /snippets/{id}
+//    200·204 = 지움, 404 = 이미 없음(다른 사람이 지웠거나 다른 DB). 그 밖은 서버가 준 사유로 오류
+export type DeleteOutcome = 'deleted' | 'missing';
+export function parseDeleteResponse(status: number, text: string): DeleteOutcome {
+  if (status === 200 || status === 204) {
+    return 'deleted';
+  }
+  if (status === 404) {
+    return 'missing';
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = undefined;
+  }
+  const detail = errorDetailText(body) || text.slice(0, 200);
+  if (status === 405) {
+    throw new Error('서버에 아직 삭제 기능이 없어요 (HTTP 405). Backend 의 DELETE /snippets/{id} 가 필요해요.');
+  }
+  throw new Error(`삭제 실패 (HTTP ${status})${detail ? ': ' + detail : ''}`);
+}
+
 // ── 8. 기타
 export function formatSeconds(ms: number): string {
   return `${(ms / 1000).toFixed(2)}초`;

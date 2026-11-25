@@ -1,7 +1,7 @@
 // logic.ts 단위 테스트 — VS Code 없이 돌아간다: npm run test:unit
 import * as assert from 'assert';
 import {
-  addUsage, adjustEndLine, groupDuplicates, canSendKey, guessProvider, maskKey, validateKey, evalToCsv, evalToMarkdown, EvalRow, parseEvalQuestions, rankOf, summarizeEval, compareSource, maskSecrets, scanSecrets, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
+  addUsage, adjustEndLine, groupDuplicates, parseDeleteResponse, canSendKey, guessProvider, maskKey, validateKey, evalToCsv, evalToMarkdown, EvalRow, parseEvalQuestions, rankOf, summarizeEval, compareSource, maskSecrets, scanSecrets, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
 } from '../logic';
 
 const linesOf = (src: string) => {
@@ -530,5 +530,21 @@ suite('groupDuplicates — 같은 코드 묶기', () => {
   test('웹페이지에 넣을 수 있게 혼자 돌아감', () => {
     const fn = new Function('return ' + groupDuplicates.toString())() as typeof groupDuplicates;
     assert.strictEqual(fn([r(1, 'a'), r(2, 'a')]).length, 1);
+  });
+});
+
+suite('parseDeleteResponse — 저장 코드 삭제 응답', () => {
+  test('200·204 는 지움', () => {
+    assert.strictEqual(parseDeleteResponse(204, ''), 'deleted');
+    assert.strictEqual(parseDeleteResponse(200, '{"deleted":true}'), 'deleted');
+  });
+  test('404 는 이미 없음', () => {
+    assert.strictEqual(parseDeleteResponse(404, '{"detail":"not found"}'), 'missing');
+  });
+  test('405 는 서버에 기능 없음 안내', () => {
+    assert.throws(() => parseDeleteResponse(405, '{"detail":"Method Not Allowed"}'), /DELETE \/snippets/);
+  });
+  test('그 밖은 서버 사유를 붙여 오류', () => {
+    assert.throws(() => parseDeleteResponse(500, '{"detail":{"code":"db","message":"DB 연결 실패"}}'), /HTTP 500.*DB 연결 실패/);
   });
 });
