@@ -953,6 +953,25 @@ export function validateKey(key: string): string | null {
   return null;
 }
 
+// ── 15. 같은 코드 묶기 — 검색 결과에서 코드 내용이 똑같은 것(줄바꿈 종류·줄 끝 공백·앞뒤 빈 줄 무시)을
+//    가장 앞(순위 높은) 하나로 묶는다. 웹페이지에 toString() 으로 넣으므로 이 함수 안에서만 끝나야 한다
+export function groupDuplicates<T extends { code?: string }>(results: T[]): { head: T; dups: T[] }[] {
+  const groups: { head: T; dups: T[] }[] = [];
+  const byKey: Record<string, { head: T; dups: T[] }> = {};
+  for (const r of results) {
+    const key = String(r.code || '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/\s+$/, '')).join('\n').replace(/^\n+|\n+$/g, '');
+    const found = key ? byKey[key] : undefined;
+    if (found) {
+      found.dups.push(r);
+    } else {
+      const g = { head: r, dups: [] as T[] };
+      groups.push(g);
+      if (key) { byKey[key] = g; }
+    }
+  }
+  return groups;
+}
+
 // ── 8. 기타
 export function formatSeconds(ms: number): string {
   return `${(ms / 1000).toFixed(2)}초`;

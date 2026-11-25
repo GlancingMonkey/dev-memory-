@@ -239,6 +239,11 @@
           "minimum": 0,
           "maximum": 365,
           "description": "처음 화면 \"다시 볼 만한 코드\"에 띄울 기준 — 저장한 지 며칠 지난 코드인지 (0 이면 바로)"
+        },
+        "codeMemory.groupDuplicates": {
+          "type": "boolean",
+          "default": true,
+          "description": "검색 결과에서 코드 내용이 똑같은 것은 가장 위 하나만 보이고 나머지는 접기"
         }
       }
     },
