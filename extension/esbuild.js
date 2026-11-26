@@ -42,11 +42,28 @@ async function main() {
 			esbuildProblemMatcherPlugin,
 		],
 	});
+	// Code Memory 탭 화면 (웹뷰) — 개념 계산은 src/study.ts 를 같이 묶는다
+	const web = await esbuild.context({
+		entryPoints: ['src/web/hub.js'],
+		bundle: true,
+		format: 'iife',
+		minify: production,
+		sourcemap: !production,
+		sourcesContent: false,
+		platform: 'browser',
+		target: 'es2020',
+		outfile: 'dist/hub.js',
+		logLevel: 'silent',
+		plugins: [esbuildProblemMatcherPlugin],
+	});
 	if (watch) {
 		await ctx.watch();
+		await web.watch();
 	} else {
 		await ctx.rebuild();
 		await ctx.dispose();
+		await web.rebuild();
+		await web.dispose();
 	}
 }
 

@@ -422,7 +422,7 @@ export function useProjectLocations(locations: ProjectLocations): void {
   projectLocations = locations;
 }
 
-function resolveUri(r: SearchResult): vscode.Uri | null {
+export function resolveUri(r: SearchResult): vscode.Uri | null {
   if (r.absolute_path) {
     return vscode.Uri.file(r.absolute_path);
   }
@@ -524,6 +524,7 @@ type FromWebview =
   | { type: 'openMap'; focus?: string }
   | { type: 'exportNotes' }
   | { type: 'studyReq'; reqId: number; mode: StudyMode; fresh?: boolean; req: StudyRequest }
+  | { type: 'openHub'; result: Partial<SearchResult>; follow?: boolean }
   | { type: 'diffText'; left: string; right: string; language: string; title?: string }
   | { type: 'traceShow'; reqId: number; step: number; follow: boolean }
   | { type: 'followStop' }
@@ -747,6 +748,11 @@ function defaultCall(req: { function_name?: unknown }): string {
 }
 
 // AI 대화에 코드를 같이 보낼 때 — 서버에 코드 첨부 칸이 생기기 전까지 질문 앞에 붙인다 (코드는 각 4000자까지)
+// 공부 화면을 어디에 열지 — 기본은 코드 옆 Code Memory 탭
+export function studyInTab(): boolean {
+  return vscode.workspace.getConfiguration('codeMemory').get<string>('studyLocation', 'tab') !== 'sidebar';
+}
+
 export function withCodeContext(q: string, items: { label: string; language: string; code: string }[]): string {
   const blocks = items.filter((i) => i.code && i.code.trim()).map((i) => `[참고 코드: ${i.label}]\n\`\`\`${i.language}\n${i.code.slice(0, 4000)}\n\`\`\``);
   return blocks.length ? `${blocks.join('\n\n')}\n\n질문: ${q}` : q;
@@ -763,6 +769,15 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
 
   private pendingPrefill: { text: string; selStart: number; selEnd: number } | undefined;   // "이 코드에 대해 묻기"
   private pendingStudy: Partial<SearchResult> | undefined;   // "선택한 코드로 공부"
+  // Code Memory 탭 (공부 · 실행 과정 · AI 대화) — extension.ts 가 넣어 준다
+  private hubOpener: ((item: Partial<SearchResult> & { _follow?: { call?: string } }, tab: 'study' | 'trace') => Promise<void>) | undefined;
+  public setHubOpener(fn: (item: Partial<SearchResult> & { _follow?: { call?: string } }, tab: 'study' | 'trace') => Promise<void>): void {
+    this.hubOpener = fn;
+  }
+  // Code Memory 탭에서 복습 기록이 바뀌면 사이드바 오늘 복습도 다시
+  public refreshStudy(): void {
+    void this.view?.webview.postMessage({ type: 'study', study: readStudy(this.global.get(STUDY_KEY)) });
+  }
   private readonly askCtrls = new Map<number, AbortController>();   // 생성 중인 질문 → 취소용
   private readonly usageEmitter = new vscode.EventEmitter<UsageDay>();
   public readonly onDidChangeUsage = this.usageEmitter.event;
@@ -836,6 +851,12 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
     } catch {
       return undefined;
     }
+  }
+  // AI 대화를 회사 API 로 직접 부를 때 — mock · 서버 주소와 상관없이 "내 키 쓰기"면 그 키
+  public async ownKey(): Promise<{ provider: LlmProvider; value: string } | undefined> {
+    if (!this.keyPrefs().useOwn) { return undefined; }
+    const k = await this.readKey();
+    return k && k.key ? { provider: k.provider, value: k.key } : undefined;
   }
   private keyPrefs(): KeyPrefs {
     return this.global.get<KeyPrefs>(KEY_PREFS_KEY, { useOwn: true });
@@ -966,6 +987,11 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
 
   // 편집기에서 "선택한 코드로 공부" → 패널을 열고 공부 화면
   public async openStudy(item: Partial<SearchResult>): Promise<void> {
+    const it = item as Partial<SearchResult> & { _follow?: { call?: string } };
+    if (this.hubOpener && studyInTab()) {
+      await this.hubOpener(it, it._follow ? 'trace' : 'study');
+      return;
+    }
     this.pendingStudy = item;
     await vscode.commands.executeCommand(`${SearchViewProvider.viewId}.focus`);
     this.flush();
@@ -1224,6 +1250,7 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
         askOnQuestionMark: config.get<boolean>('askOnQuestionMark', true),
         reviewAfterDays: clamp(config.get<number>('reviewAfterDays'), 0, 365, 7),
         groupDuplicates: config.get<boolean>('groupDuplicates', true),
+        hubMode: studyInTab(),
       });
     };
     const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
@@ -1488,6 +1515,12 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
         }
         case 'openMap': {
           this.openConceptMap(msg.focus);
+          break;
+        }
+        case 'openHub': {
+          // 검색 결과 · 오늘 복습에서 📘 공부 / ▶ 실행 과정 → Code Memory 탭
+          const item = { ...msg.result, ...(msg.follow ? { _follow: {} } : {}) } as Partial<SearchResult>;
+          await this.openStudy(item);
           break;
         }
         case 'studyReq': {
@@ -2483,7 +2516,7 @@ function getHtml(webview: vscode.Webview): string {
   let searching = false;     // 검색 응답을 기다리는 중이면 또 보내지 않는다
   let lastQuery = '';        // 다시 시도용
   let current = null;        // { query, results, restored } — results 에 원래 순위(rank)를 붙여 둔다
-  let mode = { mock: true, apiUrl: '' };
+  let mode = { mock: true, apiUrl: '', hubMode: true };
   let prefs = { view: 'full', historyOpen: false, askHintSeen: false };
   let recentItems = [];
   let dupOpen = {};   // 같은 코드 묶음 펼침 상태 — 검색마다 새로
@@ -2740,7 +2773,7 @@ function getHtml(webview: vscode.Webview): string {
     switch (msg.type) {
       case 'config':
         mode = { mock: !!msg.mock, apiUrl: msg.apiUrl || '', askTimeout: msg.askTimeout || 45, askOnQuestionMark: msg.askOnQuestionMark !== false,
-          reviewAfterDays: typeof msg.reviewAfterDays === 'number' ? msg.reviewAfterDays : 7, groupDuplicates: msg.groupDuplicates !== false };
+          reviewAfterDays: typeof msg.reviewAfterDays === 'number' ? msg.reviewAfterDays : 7, groupDuplicates: msg.groupDuplicates !== false, hubMode: msg.hubMode !== false };
         renderReview();
         if (current) { renderResults(); }
         banner.hidden = !msg.mock;
@@ -3164,6 +3197,8 @@ function getHtml(webview: vscode.Webview): string {
     studyGraph().forEach(function (n) { if (n.status === 'ok' && n.count > 0 && !study.mastered[n.id]) { study.mastered[n.id] = now; } });
   }
   function openStudy(r) {
+    // 기본은 코드 옆 Code Memory 탭에서 (설정 codeMemory.studyLocation = sidebar 면 여기서)
+    if (mode.hubMode) { vscode.postMessage({ type: 'openHub', result: r, follow: !!r._follow }); return; }
     stopTrace();
     studyCur = { r: r, key: studyKey(r), hits: detectConcepts(String(r.code || ''), r.language, r.function_name, STUDY_CONCEPTS), sel: '', tab: 'concepts', m: {}, hlLines: [] };
     if (studyCur.hits.length) { studyCur.sel = studyCur.hits[0].id; }
@@ -4866,6 +4901,11 @@ function getHtml(webview: vscode.Webview): string {
     const studyBtn = action('book', '공부', function () { openStudy(r); });
     studyBtn.title = '이 코드에 쓰인 개념 보고 복습에 넣기';
     acts.append(studyBtn);
+    if (mode.hubMode && String(r.language || '').toLowerCase() === 'python') {
+      const runBtn = action('redo', '실행 과정', function () { vscode.postMessage({ type: 'openHub', result: r, follow: true }); });
+      runBtn.title = '이 코드가 한 줄씩 실행되는 과정을 해설과 함께 보기';
+      acts.append(runBtn);
+    }
     if (typeof r.id === 'number') {
       const delBtn = action('trash', '삭제', function () { vscode.postMessage({ type: 'deleteSnippet', result: r }); });
       delBtn.classList.add('del');

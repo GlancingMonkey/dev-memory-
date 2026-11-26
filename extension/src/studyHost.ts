@@ -204,7 +204,7 @@ export interface StudyRequest {
   function_name: string | null;
   [extra: string]: unknown;      // target(다른 언어), answer(내 말로), call(실행), calls·tests(채점)
 }
-const AI_MODES: StudyMode[] = ['quiz', 'translate', 'explain', 'why', 'review', 'task', 'bug'];
+const AI_MODES: StudyMode[] = ['quiz', 'translate', 'explain', 'why', 'review', 'task', 'bug', 'plain', 'lines', 'narrate'];
 
 export async function fetchStudy(mode: StudyMode, req: StudyRequest, key: { provider: LlmProvider; value: string } | undefined): Promise<unknown> {
   const config = vscode.workspace.getConfiguration('codeMemory');
@@ -347,6 +347,7 @@ function mockTrace(req: StudyRequest): unknown {
   return { call, steps };
 }
 export function mockStudy(mode: StudyMode, req: StudyRequest): unknown {
+  if (mode === 'plain' || mode === 'lines' || mode === 'narrate') { return mockEasy(mode, req); }
   const name = req.function_name || 'f';
   const lang = (req.language || '').toLowerCase();
   const py = lang === 'python';
@@ -475,4 +476,28 @@ export class StudyCache {
     const items = [{ k, v }, ...this.global.get<{ k: string; v: unknown }[]>(STUDY_CACHE_KEY, []).filter((c) => c.k !== k)].slice(0, STUDY_CACHE_MAX);
     await this.global.update(STUDY_CACHE_KEY, items);
   }
+}
+
+// mock — 쉬운 말 (Code Memory 탭의 "이 코드가 하는 일" · 줄별 설명 · 실행 과정 해설)
+function mockEasy(mode: 'plain' | 'lines' | 'narrate', req: StudyRequest): unknown {
+  const name = req.function_name || '이 코드';
+  if (mode === 'plain') {
+    if (name === 'even_numbers') {
+      return { one_line: '숫자 목록에서 2로 나누어떨어지는 숫자, 즉 짝수만 골라 새 목록으로 돌려줘요.', analogy: '섞여 있는 구슬 바구니에서 짝수 번호 구슬만 골라 따로 담는 것과 같아요.', use: '점수나 번호 목록에서 조건에 맞는 것만 추릴 때 써요.' };
+    }
+    if (name === 'fact') {
+      return { one_line: '숫자 하나를 받아 1부터 그 숫자까지 모두 곱한 값을 알려줘요.', analogy: '계단을 한 칸씩 내려가며 숫자를 곱해 모으는 것과 같아요.', use: '경우의 수를 셀 때 써요.' };
+    }
+    return { one_line: `${name} 는 받은 값으로 정해진 순서대로 일하고 결과를 돌려주는 함수예요.`, analogy: '재료를 넣으면 요리가 나오는 레시피와 같아요.', use: '같은 일을 여러 번 해야 할 때 이름을 붙여 두고 불러 써요.' };
+  }
+  if (mode === 'lines') {
+    const lines = req.code.split('\n').map((t, i) => ({ line: i + 1, plain: t.trim() ? `${i + 1}번째 줄: 「${t.trim().slice(0, 40)}」 을(를) 실행해요. (예시 설명 — 서버에 연결하면 AI 가 쉬운 말로 풀어 줘요)` : '' }))
+      .filter((l) => l.plain);
+    return { lines };
+  }
+  const n = Array.isArray(req.steps) ? req.steps.length : 0;
+  return {
+    summary: `${String(req.call || name)} 을(를) 실행한 과정이에요. (예시 해설 — 서버에 연결하면 AI 가 단계마다 쉬운 말로 풀어 줘요)`,
+    steps: Array.from({ length: n }, (_, i) => `${i + 1}단계: 이 줄을 실행해요. 값이 어떻게 바뀌는지 아래 "실행 중인 함수"에서 볼 수 있어요.`),
+  };
 }

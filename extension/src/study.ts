@@ -493,7 +493,8 @@ export function studyNotesMarkdown(cards: NoteCard[], nodes: GraphNode[], concep
 }
 
 // ── 공부 모드 AI · 실행 — POST /study/{mode} (Backend 협의안). 응답 모양이 틀린 항목은 버린다
-export type StudyMode = 'quiz' | 'translate' | 'explain' | 'why' | 'review' | 'task' | 'bug' | 'trace' | 'run';
+export type StudyMode = 'quiz' | 'translate' | 'explain' | 'why' | 'review' | 'task' | 'bug' | 'trace' | 'run'
+  | 'plain' | 'lines' | 'narrate';
 const s_ = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '');
 const arr_ = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const obj_ = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {});
@@ -514,9 +515,13 @@ export interface BugResult { code: string; line: number; explain: string; fixed_
 export interface TraceFrame { name: string; vars: Record<string, string> }
 export interface TraceObject { label: string; items: string[]; look: number; marks: string[] }
 export interface TraceStep { line: number; say: string; frames: TraceFrame[]; objects: TraceObject[]; ret: string }
-export interface TraceResult { call: string; steps: TraceStep[]; truncated: boolean }
+export interface TraceResult { call: string; steps: TraceStep[]; truncated: boolean; value?: string; stdout?: string }
 export interface RunCase { call: string; output: string; error: string; expected: string; ok: boolean | null }
 export interface RunResult { cases: RunCase[] }
+// 쉬운 말 — 코드를 처음 보는 사람용 (Code Memory 탭)
+export interface PlainResult { one_line: string; analogy: string; use: string }
+export interface LinesResult { lines: { line: number; plain: string }[] }
+export interface NarrateResult { summary: string; steps: string[] }
 
 export function parseStudyResult(mode: StudyMode, body: unknown): unknown {
   const b = obj_(body);
@@ -585,7 +590,7 @@ export function parseStudyResult(mode: StudyMode, body: unknown): unknown {
         ret: s_(st.ret, 120),
       }) as TraceStep).filter((st) => st.line >= 1);
       if (!steps.length) { throw new Error('실행 기록이 없습니다'); }
-      return { call: s_(b.call, 300), steps, truncated: b.truncated === true } as TraceResult;
+      return { call: s_(b.call, 300), steps, truncated: b.truncated === true, value: s_(b.value, 300), stdout: s_(b.stdout, 500) } as TraceResult;
     }
     case 'run': {
       const cases = arr_(b.cases).slice(0, 20).map(obj_).map((c) => ({
@@ -594,6 +599,22 @@ export function parseStudyResult(mode: StudyMode, body: unknown): unknown {
       }) as RunCase);
       if (!cases.length) { throw new Error('실행 결과가 없습니다'); }
       return { cases } as RunResult;
+    }
+    case 'plain': {
+      const one = s_(b.one_line, 300);
+      if (!one) { throw new Error('설명이 없습니다'); }
+      return { one_line: one, analogy: s_(b.analogy, 300), use: s_(b.use, 300) } as PlainResult;
+    }
+    case 'lines': {
+      const lines = arr_(b.lines).map(obj_).map((l) => ({ line: typeof l.line === 'number' ? l.line : 0, plain: s_(l.plain, 400) }))
+        .filter((l) => l.line >= 1 && l.line <= 5000 && l.plain).slice(0, 300);
+      if (!lines.length) { throw new Error('줄별 설명이 없습니다'); }
+      return { lines } as LinesResult;
+    }
+    case 'narrate': {
+      const steps = arr_(b.steps).slice(0, 400).map((x) => s_(x, 400));
+      if (!steps.some(Boolean)) { throw new Error('해설이 없습니다'); }
+      return { summary: s_(b.summary, 600), steps } as NarrateResult;
     }
   }
   return null;

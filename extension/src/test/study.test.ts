@@ -206,3 +206,27 @@ suite('parseStudyResult — 문제·다른 언어로·내 말로·왜·리뷰·�
     assert.throws(() => P('task', { task: '과제', tests: [] }), /과제/);
   });
 });
+
+suite('parseStudyResult — 쉬운 말 (Code Memory 탭)', () => {
+  const S = require('../study') as typeof import('../study');
+  const P = S.parseStudyResult;
+  test('이 코드가 하는 일 — 한 문장이 없으면 오류', () => {
+    assert.deepStrictEqual(P('plain', { one_line: '짝수만 골라요', analogy: '구슬 고르기' }), { one_line: '짝수만 골라요', analogy: '구슬 고르기', use: '' });
+    assert.throws(() => P('plain', { analogy: '비유만' }), /설명/);
+  });
+  test('줄별 설명 — 줄 번호가 없거나 설명이 비면 버림', () => {
+    const r = P('lines', { lines: [{ line: 1, plain: '함수를 만들어요' }, { line: 0, plain: 'x' }, { line: 2, plain: '' }, { plain: 'y' }] }) as { lines: { line: number }[] };
+    assert.deepStrictEqual(r.lines.map((l) => l.line), [1]);
+    assert.throws(() => P('lines', { lines: [] }), /줄별/);
+  });
+  test('실행 과정 해설 — 단계 순서 유지, 전부 비면 오류', () => {
+    const r = P('narrate', { summary: '요약', steps: ['하나', 3, '셋'] }) as { steps: string[] };
+    assert.deepStrictEqual(r.steps, ['하나', '', '셋']);
+    assert.throws(() => P('narrate', { steps: ['', ''] }), /해설/);
+  });
+  test('실행 기록 — 최종 값과 출력도 남김', () => {
+    const r = P('trace', { call: 'f(1)', steps: [{ line: 1, frames: [] }], value: '2', stdout: 'hi' }) as { value: string; stdout: string };
+    assert.strictEqual(r.value, '2');
+    assert.strictEqual(r.stdout, 'hi');
+  });
+});

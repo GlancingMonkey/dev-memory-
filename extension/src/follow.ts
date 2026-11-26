@@ -217,7 +217,14 @@ export interface FollowTarget {
   code: string;
 }
 
-export class EditorFollower {
+export class EditorFollower implements vscode.CodeLensProvider {
+  // 따라가는 동안 지금 줄 바로 위에 ◀ 이전 | 다음 ▶ | ■ 멈춤 (F10 을 못 쓰는 환경에서도 마우스로)
+  private readonly lensChanged = new vscode.EventEmitter<void>();
+  readonly onDidChangeCodeLenses = this.lensChanged.event;
+  private readonly lensReg = vscode.languages.registerCodeLensProvider({ scheme: 'file' }, this);
+  private readonly prevItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 202);
+  private readonly nextItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 201);
+  private step = -1;
   private readonly current = vscode.window.createTextEditorDecorationType({
     isWholeLine: true,
     backgroundColor: new vscode.ThemeColor('editor.stackFrameHighlightBackground'),
@@ -238,6 +245,27 @@ export class EditorFollower {
 
   constructor() {
     this.status.command = 'codeMemory.followStop';
+    this.prevItem.text = '$(arrow-left)';
+    this.prevItem.tooltip = '이전 단계';
+    this.prevItem.command = 'codeMemory.followPrev';
+    this.nextItem.text = '$(arrow-right)';
+    this.nextItem.tooltip = '다음 단계 (F10)';
+    this.nextItem.command = 'codeMemory.followNext';
+  }
+
+  provideCodeLenses(doc: vscode.TextDocument): vscode.CodeLens[] {
+    const ed = this.editor;
+    const tr = this.trace;
+    if (!ed || !tr || doc !== ed.document || this.step < 0 || this.step >= tr.steps.length) { return []; }
+    const line = this.offset + tr.steps[this.step].line - 1;
+    if (line < 0 || line >= doc.lineCount) { return []; }
+    const r = new vscode.Range(line, 0, line, 0);
+    return [
+      new vscode.CodeLens(r, { title: `▶ 실행 과정 ${this.step + 1}/${tr.steps.length}`, command: '' }),
+      new vscode.CodeLens(r, { title: '◀ 이전', command: 'codeMemory.followPrev', tooltip: '이전 단계' }),
+      new vscode.CodeLens(r, { title: '다음 ▶', command: 'codeMemory.followNext', tooltip: '다음 단계 (F10)' }),
+      new vscode.CodeLens(r, { title: '■ 멈춤', command: 'codeMemory.followStop', tooltip: '실행 과정 보기 끝내기 (Esc)' }),
+    ];
   }
 
   dispose(): void {
@@ -246,6 +274,10 @@ export class EditorFollower {
     this.values.dispose();
     this.heat.dispose();
     this.status.dispose();
+    this.prevItem.dispose();
+    this.nextItem.dispose();
+    this.lensReg.dispose();
+    this.lensChanged.dispose();
   }
 
   get active(): boolean {
@@ -312,6 +344,10 @@ export class EditorFollower {
       this.status.show();
       return;
     }
+    this.step = step;
+    this.lensChanged.fire();
+    this.prevItem.show();
+    this.nextItem.show();
     const cur = tr.steps[step];
     const line = this.offset + cur.line - 1;
     if (line < 0 || line >= ed.document.lineCount) { return; }
@@ -332,7 +368,7 @@ export class EditorFollower {
     });
     ed.setDecorations(this.heat, heat);
     ed.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
-    this.status.text = `$(debug-step-over) 따라가는 중 ${step + 1} / ${tr.steps.length} · F10 한 단계 · Esc 멈춤`;
+    this.status.text = `$(debug-step-over) 실행 과정 ${step + 1} / ${tr.steps.length} · 눌러서 멈춤`;
     this.status.show();
   }
 
@@ -346,6 +382,10 @@ export class EditorFollower {
     this.trace = undefined;
     this.target = undefined;
     this.status.hide();
+    this.prevItem.hide();
+    this.nextItem.hide();
+    this.step = -1;
+    this.lensChanged.fire();
     void vscode.commands.executeCommand('setContext', 'codeMemory.following', false);
   }
 }
