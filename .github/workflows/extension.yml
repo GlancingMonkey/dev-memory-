@@ -1,0 +1,41 @@
+# Extension 검사 — extension/ 이 바뀐 push·PR 마다 타입 검사 · lint · 단위 테스트, 통과하면 .vsix 를 만들어 올린다
+name: Extension
+
+on:
+  push:
+    branches: [develop, main]
+    paths: ['extension/**', '.github/workflows/extension.yml']
+  pull_request:
+    paths: ['extension/**', '.github/workflows/extension.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      - name: 타입 검사
+        run: npm run check-types
+      - name: Lint
+        run: npm run lint
+      - name: 단위 테스트
+        run: npm run test:unit
+      - name: .vsix 만들기
+        run: npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository --skip-license -o code-memory.vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-memory-vsix
+          path: extension/code-memory.vsix
+          retention-days: 14

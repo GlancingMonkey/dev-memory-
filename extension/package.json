@@ -51,6 +51,30 @@
         "title": "Code Memory: ✦ 이 코드에 대해 묻기"
       },
       {
+        "command": "codeMemory.studySelection",
+        "title": "Code Memory: 📘 이 코드로 공부"
+      },
+      {
+        "command": "codeMemory.openConceptMap",
+        "title": "Code Memory: 📘 개념 지도 열기"
+      },
+      {
+        "command": "codeMemory.openChat",
+        "title": "Code Memory: ✦ AI 대화 크게 열기"
+      },
+      {
+        "command": "codeMemory.followFunction",
+        "title": "Code Memory: ▶ 이 함수 실행하며 따라가기 (Python)"
+      },
+      {
+        "command": "codeMemory.followNext",
+        "title": "Code Memory: 따라가기 한 단계"
+      },
+      {
+        "command": "codeMemory.followStop",
+        "title": "Code Memory: 따라가기 멈춤"
+      },
+      {
         "command": "codeMemory.exportFeedback",
         "title": "Code Memory: AI 피드백 내보내기",
         "icon": "$(export)"
@@ -95,6 +119,11 @@
           "command": "codeMemory.findSimilar",
           "when": "editorTextFocus",
           "group": "navigation@0.3"
+        },
+        {
+          "command": "codeMemory.studySelection",
+          "when": "editorTextFocus",
+          "group": "navigation@0.4"
         }
       ],
       "view/title": [
@@ -123,6 +152,14 @@
         {
           "command": "codeMemory.runOnFunction",
           "when": "false"
+        },
+        {
+          "command": "codeMemory.followNext",
+          "when": "codeMemory.following"
+        },
+        {
+          "command": "codeMemory.followStop",
+          "when": "codeMemory.following"
         }
       ]
     },
@@ -140,6 +177,16 @@
         "command": "codeMemory.askAboutSelection",
         "key": "ctrl+alt+a",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "codeMemory.followNext",
+        "key": "f10",
+        "when": "codeMemory.following && !inDebugMode"
+      },
+      {
+        "command": "codeMemory.followStop",
+        "key": "escape",
+        "when": "codeMemory.following && editorTextFocus && !suggestWidgetVisible && !inDebugMode"
       }
     ],
     "viewsContainers": {
@@ -157,6 +204,11 @@
           "type": "webview",
           "id": "codeMemory.searchView",
           "name": "검색"
+        },
+        {
+          "type": "webview",
+          "id": "codeMemory.chatView",
+          "name": "AI 대화"
         }
       ]
     },
@@ -244,6 +296,16 @@
           "type": "boolean",
           "default": true,
           "description": "검색 결과에서 코드 내용이 똑같은 것은 가장 위 하나만 보이고 나머지는 접기"
+        },
+        "codeMemory.localRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "Python 코드의 실행 따라가기·깨뜨려 보기·바꿔 보기 채점을 이 PC 의 Python 으로 직접 실행 (처음에 확인창, 5초 제한). 끄면 서버(POST /study/trace · run)를 씀"
+        },
+        "codeMemory.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "직접 실행에 쓸 Python 실행 파일 경로. 비우면 python · py · python3 순서로 찾음"
         }
       }
     },
@@ -314,7 +376,7 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vscode-test",
-    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js out/test/evaluationKey.test.js out/test/projectLocations.test.js",
+    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js out/test/evaluationKey.test.js out/test/projectLocations.test.js out/test/study.test.js",
     "vsix": "npx --yes @vscode/vsce@3 package --no-dependencies --skip-license"
   },
   "devDependencies": {
