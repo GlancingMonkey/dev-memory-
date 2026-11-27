@@ -1,5 +1,14 @@
 import * as vscode from 'vscode';
 import { ProjectLocations, relativeSourceParts } from './projectLocations';
+import { buildConceptGraph, detectConcepts, dueCards, scheduleNext, STUDY_CONCEPTS, weeklyReport } from './study';
+import {
+  AiConceptCache, COUNTS_KEY, countConceptsInDb, fetchAiConcepts, fetchStudy, openStudyNotes, readStudy, STUDY_KEY, StudyAiError, StudyCache,
+  StudyRequest,
+} from './studyHost';
+import { StudyMode } from './study';
+import { ConceptMapPanel } from './conceptMap';
+import { EditorFollower, FollowTarget, LocalRunError, LocalRunner } from './follow';
+import { TraceResult } from './study';
 import {
   addUsage, answerToMarkdown, askCacheKey, AskError, askErrorFor, AskResponse, AskSource, AskTurn, buildAskRequest, buildSearchUrl,
   canSendKey, checkAppliedFilter, clamp, compareSource, guessProvider, LLM_KEY_HEADER, LLM_PROVIDER_HEADER, LLM_PROVIDERS,
@@ -426,7 +435,7 @@ function resolveUri(r: SearchResult): vscode.Uri | null {
   return folder && !projectLocations ? vscode.Uri.joinPath(folder.uri, ...parts) : null;
 }
 
-async function openSource(r: SearchResult): Promise<void> {
+export async function openSource(r: SearchResult): Promise<void> {
   const uri = resolveUri(r);
   if (!uri) {
     // 다른 PC·다른 프로젝트에서 저장한 코드 → 엉뚱한 파일을 열지 않고 안내만
@@ -456,7 +465,7 @@ async function openSource(r: SearchResult): Promise<void> {
   await vscode.window.showTextDocument(doc, { selection: range, preview: false });
 }
 
-async function insertCode(code: string): Promise<void> {
+export async function insertCode(code: string): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
     vscode.window.showWarningMessage('코드를 넣을 편집기를 먼저 여세요.');
@@ -510,6 +519,17 @@ type FromWebview =
   | { type: 'clearHistory' }
   | { type: 'removeRecent'; q: string; ai: boolean }
   | { type: 'deleteSnippet'; result: SearchResult }
+  | { type: 'study'; study: unknown }
+  | { type: 'studyAi'; reqId: number; fresh?: boolean; req: { code: string; language: string; function_name: string | null } }
+  | { type: 'openMap'; focus?: string }
+  | { type: 'exportNotes' }
+  | { type: 'studyReq'; reqId: number; mode: StudyMode; fresh?: boolean; req: StudyRequest }
+  | { type: 'diffText'; left: string; right: string; language: string; title?: string }
+  | { type: 'traceShow'; reqId: number; step: number; follow: boolean }
+  | { type: 'followStop' }
+  | { type: 'studyAsk'; reqId: number; q: string; history: AskTurn[]; code: string; language: string; name: string }
+  | { type: 'studyAskCancel' }
+  | { type: 'openUrl'; url: string }
   | { type: 'removeHistory'; time: string; id?: number }
   | { type: 'copyText'; text: string }
   | { type: 'prefs'; prefs: UiPrefs }
@@ -607,8 +627,14 @@ interface UiPrefs {
   reviewHidden?: boolean;
   demo?: { on: boolean; done: string[] };   // 시연 모드
   askHintSeen?: boolean;   // "끝에 ? 를 붙이면 AI" 첫 안내를 닫았는지
+  studyHidden?: boolean;   // 처음 화면 "공부" 숨김
 }
 const PREFS_KEY = 'codeMemory.uiPrefs';
+
+// 개념 목록을 웹페이지 스크립트에 넣을 때 — 백틱·${·</script> 가 끼지 않게
+function studyConceptsJson(): string {
+  return JSON.stringify(STUDY_CONCEPTS).replace(/`/g, '\\u0060').replace(/\$/g, '\\u0024').replace(/</g, '\\u003c');
+}
 const DEFAULT_PREFS: UiPrefs = { view: 'full', historyOpen: false };
 
 // 마지막 검색 — 다시 열었을 때 복원용
@@ -714,6 +740,18 @@ async function currentRange(doc: vscode.TextDocument, r: SearchResult): Promise<
 // ─────────────────────────────────────────────
 // 사이드바 패널 — VS Code 가 패널을 처음 보여줄 때 resolveWebviewView 를 부른다
 // ─────────────────────────────────────────────
+// 실행할 호출이 없으면 함수 이름() — 인자가 필요하면 사용자가 고친다
+function defaultCall(req: { function_name?: unknown }): string {
+  const name = typeof req.function_name === 'string' && /^[A-Za-z_]\w*$/.test(req.function_name) ? req.function_name : '';
+  return name ? `${name}()` : '';
+}
+
+// AI 대화에 코드를 같이 보낼 때 — 서버에 코드 첨부 칸이 생기기 전까지 질문 앞에 붙인다 (코드는 각 4000자까지)
+export function withCodeContext(q: string, items: { label: string; language: string; code: string }[]): string {
+  const blocks = items.filter((i) => i.code && i.code.trim()).map((i) => `[참고 코드: ${i.label}]\n\`\`\`${i.language}\n${i.code.slice(0, 4000)}\n\`\`\``);
+  return blocks.length ? `${blocks.join('\n\n')}\n\n질문: ${q}` : q;
+}
+
 export class SearchViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = 'codeMemory.searchView';
 
@@ -724,6 +762,7 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
   private searchGeneration = 0;
 
   private pendingPrefill: { text: string; selStart: number; selEnd: number } | undefined;   // "이 코드에 대해 묻기"
+  private pendingStudy: Partial<SearchResult> | undefined;   // "선택한 코드로 공부"
   private readonly askCtrls = new Map<number, AbortController>();   // 생성 중인 질문 → 취소용
   private readonly usageEmitter = new vscode.EventEmitter<UsageDay>();
   public readonly onDidChangeUsage = this.usageEmitter.event;
@@ -925,6 +964,71 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
     this.flush();
   }
 
+  // 편집기에서 "선택한 코드로 공부" → 패널을 열고 공부 화면
+  public async openStudy(item: Partial<SearchResult>): Promise<void> {
+    this.pendingStudy = item;
+    await vscode.commands.executeCommand(`${SearchViewProvider.viewId}.focus`);
+    this.flush();
+  }
+
+  // 개념 지도 크게 보기 (편집기 탭)
+  private aiConceptsCache: AiConceptCache | undefined;
+  private get aiConcepts(): AiConceptCache {
+    if (!this.aiConceptsCache) { this.aiConceptsCache = new AiConceptCache(this.global); }
+    return this.aiConceptsCache;
+  }
+  private countToken = { cancelled: false };
+  private readonly traces = new Map<number, { data: TraceResult; target: FollowTarget }>();
+  private followingReq: number | undefined;
+  private studyAskCtrl: AbortController | undefined;
+  private localRunnerInst: LocalRunner | undefined;
+  private get localRunner(): LocalRunner {
+    if (!this.localRunnerInst) { this.localRunnerInst = new LocalRunner(this.global); }
+    return this.localRunnerInst;
+  }
+  // 편집기에서 따라가기 — 처음 쓸 때 만든다 (꾸밈 타입·상태 표시줄)
+  private followerInst: EditorFollower | undefined;
+  public get follower(): EditorFollower {
+    if (!this.followerInst) { this.followerInst = new EditorFollower(); }
+    return this.followerInst;
+  }
+  public disposeFollower(): void {
+    this.followerInst?.dispose();
+    this.followerInst = undefined;
+  }
+  // 편집기 F10 · Esc → 사이드바 플레이어
+  public followCmd(cmd: 'next' | 'stop'): void {
+    if (cmd === 'stop') { this.followerInst?.stop(); this.followingReq = undefined; }
+    this.view?.webview.postMessage({ type: 'traceCmd', cmd });
+  }
+  private studyCacheInst: StudyCache | undefined;
+  private get studyCache(): StudyCache {
+    if (!this.studyCacheInst) { this.studyCacheInst = new StudyCache(this.global); }
+    return this.studyCacheInst;
+  }
+  public openConceptMap(focus?: string): void {
+    ConceptMapPanel.show({
+      snapshot: () => readStudy(this.global.get(STUDY_KEY)),
+      counts: () => this.global.get<{ at: string; counts: Record<string, number> }>(COUNTS_KEY),
+      openCard: async (key: string) => {
+        const c = readStudy(this.global.get(STUDY_KEY)).cards[key];
+        if (c) {
+          await this.openStudy({ id: c.id, function_name: c.function_name ?? null, file_path: c.file_path, project_name: c.project_name ?? null,
+            language: c.language, start_line: c.start_line, end_line: c.end_line, code: c.code });
+        }
+      },
+      countAll: async (progress) => {
+        this.countToken = { cancelled: false };
+        const token = this.countToken;
+        const counts = await countConceptsInDb(async (q) => (await searchSnippets(q, normalizeFilter({}))).results, progress, token);
+        if (!token.cancelled || Object.keys(counts).length) {
+          await this.global.update(COUNTS_KEY, { at: new Date().toISOString(), counts });
+        }
+      },
+      cancelCount: () => { this.countToken.cancelled = true; },
+    }, focus);
+  }
+
   // 저장 알림의 "검색에서 확인" → 패널을 열고 그 검색어로 바로 검색
   public async searchFor(query: string): Promise<void> {
     this.pendingQuery = query;
@@ -1096,6 +1200,10 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
       this.view.webview.postMessage({ type: 'prefill', ...this.pendingPrefill });
       this.pendingPrefill = undefined;
     }
+    if (this.pendingStudy) {
+      this.view.webview.postMessage({ type: 'openStudy', result: this.pendingStudy });
+      this.pendingStudy = undefined;
+    }
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -1142,6 +1250,7 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
           view.webview.postMessage({ type: 'prefs', prefs: this.state.get<UiPrefs>(PREFS_KEY, DEFAULT_PREFS) });
           view.webview.postMessage({ type: 'recent', items: this.recentView(this.readRecent()) });
           view.webview.postMessage({ type: 'history', items: this.state.get<SaveRecord[]>(HISTORY_KEY, []) });
+          view.webview.postMessage({ type: 'study', study: readStudy(this.global.get(STUDY_KEY)) });
           // 바로 검색할 게 없으면 지난 검색어·결과를 복원
           const saved = this.state.get<SavedSearch>(STATE_KEY);
           if (this.pendingQuery === undefined && saved) {
@@ -1351,6 +1460,129 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
         }
         case 'prefs': {
           await this.state.update(PREFS_KEY, msg.prefs);
+          break;
+        }
+        case 'study': {
+          await this.global.update(STUDY_KEY, readStudy(msg.study));
+          ConceptMapPanel.refresh();
+          break;
+        }
+        case 'studyAi': {
+          const req = { code: String(msg.req?.code ?? '').slice(0, 8000), language: String(msg.req?.language ?? ''), function_name: msg.req?.function_name ?? null };
+          const mock = vscode.workspace.getConfiguration('codeMemory').get<boolean>('mock', true);
+          const hit = msg.fresh ? undefined : this.aiConcepts.get(req, mock);
+          if (hit) {
+            view.webview.postMessage({ type: 'studyAi', reqId: msg.reqId, concepts: hit });
+            break;
+          }
+          try {
+            const { key } = await this.keyForRequest(false);
+            const concepts = await fetchAiConcepts(req, key);
+            await this.aiConcepts.put(req, mock, concepts);
+            view.webview.postMessage({ type: 'studyAi', reqId: msg.reqId, concepts });
+          } catch (err) {
+            view.webview.postMessage({ type: 'studyAi', reqId: msg.reqId, error: err instanceof Error ? err.message : String(err),
+              kind: err instanceof StudyAiError ? err.kind : 'server' });
+          }
+          break;
+        }
+        case 'openMap': {
+          this.openConceptMap(msg.focus);
+          break;
+        }
+        case 'studyReq': {
+          const modes: StudyMode[] = ['quiz', 'translate', 'explain', 'why', 'review', 'task', 'bug', 'trace', 'run'];
+          if (!modes.includes(msg.mode) || !msg.req || typeof msg.req.code !== 'string') { break; }
+          const mock = vscode.workspace.getConfiguration('codeMemory').get<boolean>('mock', true);
+          const hit = msg.fresh ? undefined : this.studyCache.get(msg.mode, msg.req, mock);
+          if (hit !== undefined) {
+            view.webview.postMessage({ type: 'studyRes', reqId: msg.reqId, mode: msg.mode, data: hit, cached: true });
+            break;
+          }
+          try {
+            let data: unknown;
+            let local = false;
+            // Python 은 내 PC 에서 직접 실행 (Backend 없이) — 설정 codeMemory.localRun 으로 끈다
+            if ((msg.mode === 'trace' || msg.mode === 'run') && LocalRunner.supports(msg.req.language)) {
+              local = true;
+              data = msg.mode === 'trace'
+                ? await this.localRunner.trace(msg.req.code, String(msg.req.call || defaultCall(msg.req)))
+                : await this.localRunner.run(msg.req.code, Array.isArray(msg.req.calls) ? msg.req.calls as string[] : [],
+                  Array.isArray(msg.req.tests) ? msg.req.tests as { call: string; expected: string }[] : []);
+            } else {
+              const { key } = await this.keyForRequest(false);
+              data = await fetchStudy(msg.mode, msg.req, key);
+              await this.studyCache.put(msg.mode, msg.req, mock, data);
+            }
+            if (msg.mode === 'trace') {
+              this.traces.set(msg.reqId, { data: data as TraceResult, target: (msg.req.target as FollowTarget) ?? { start_line: 1, code: msg.req.code } });
+              if (this.traces.size > 5) { this.traces.delete(this.traces.keys().next().value as number); }
+            }
+            view.webview.postMessage({ type: 'studyRes', reqId: msg.reqId, mode: msg.mode, data, local });
+          } catch (err) {
+            const kind = err instanceof StudyAiError ? err.kind : err instanceof LocalRunError ? (err.kind === 'declined' ? 'declined' : 'error') : 'server';
+            view.webview.postMessage({ type: 'studyRes', reqId: msg.reqId, mode: msg.mode, error: err instanceof Error ? err.message : String(err), kind });
+          }
+          break;
+        }
+        case 'traceShow': {
+          const t = this.traces.get(msg.reqId);
+          if (!msg.follow || !t) { if (this.followerInst?.active) { this.followerInst.stop(); } break; }
+          if (this.followingReq !== msg.reqId || !this.follower.active) {
+            this.followingReq = msg.reqId;
+            const ok = await this.follower.start(t.data, t.target);
+            if (!ok) {
+              view.webview.postMessage({ type: 'followFail' });
+              break;
+            }
+          }
+          this.follower.show(msg.step);
+          break;
+        }
+        case 'followStop': {
+          this.followerInst?.stop();
+          this.followingReq = undefined;
+          break;
+        }
+        case 'studyAsk': {
+          // 공부 화면 "✦ 묻기" — 지금 코드를 질문에 붙여 /ask 로 (서버가 코드 첨부 칸을 받기 전까지는 질문 앞에 붙인다)
+          this.studyAskCtrl?.abort();
+          const ctrl = new AbortController();
+          this.studyAskCtrl = ctrl;
+          try {
+            const { key } = await this.keyForRequest(false);
+            const q = withCodeContext(msg.q, [{ label: msg.name, language: msg.language, code: msg.code }]);
+            const r = await askBackend(q, {
+              history: Array.isArray(msg.history) ? msg.history : [], signal: ctrl.signal, key,
+              onSources: () => undefined,
+              onDelta: (text) => { view.webview.postMessage({ type: 'studyAskDelta', reqId: msg.reqId, text }); },
+            });
+            view.webview.postMessage({ type: 'studyAskDone', reqId: msg.reqId, answer: r.answer, sources: r.sources });
+          } catch (err) {
+            view.webview.postMessage({ type: 'studyAskDone', reqId: msg.reqId, error: err instanceof Error ? err.message : String(err) });
+          }
+          break;
+        }
+        case 'studyAskCancel': {
+          this.studyAskCtrl?.abort();
+          break;
+        }
+        case 'diffText': {
+          // 리뷰의 "고친 코드 비교" — 저장 안 한 새 문서 두 개를 나란히
+          const left = await vscode.workspace.openTextDocument({ content: String(msg.left ?? ''), language: msg.language || undefined });
+          const right = await vscode.workspace.openTextDocument({ content: String(msg.right ?? ''), language: msg.language || undefined });
+          await vscode.commands.executeCommand('vscode.diff', left.uri, right.uri, msg.title || '내 코드 ↔ 고친 코드');
+          break;
+        }
+        case 'exportNotes': {
+          await openStudyNotes(readStudy(this.global.get(STUDY_KEY)));
+          break;
+        }
+        case 'openUrl': {
+          // 개념의 공식 문서 — https 만
+          if (typeof msg.url === 'string' && /^https:\/\//.test(msg.url)) {
+            await vscode.env.openExternal(vscode.Uri.parse(msg.url));
+          }
           break;
         }
         case 'switchMode': {
@@ -1706,6 +1938,259 @@ function getHtml(webview: vscode.Webview): string {
 
   /* AI 키 화면 — 켜져 있으면 검색 화면은 숨긴다 */
   body.keymode #header, body.keymode .content, body.keymode .section, body.keymode #banner, body.keymode #toast { display: none !important; }
+  body.studymode #header, body.studymode .content, body.studymode .section, body.studymode #banner, body.studymode #toast, body.studymode #keyPanel { display: none !important; }
+  /* 공부 화면 */
+  .studyp { padding: 8px 10px 16px; }
+  .st-title { display: flex; align-items: center; gap: 8px; margin: 2px 0 2px; }
+  .st-name { font-weight: 600; font-family: var(--vscode-editor-font-family); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .st-chip { margin-left: auto; flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 8px; color: var(--vscode-descriptionForeground);
+             border: 1px solid color-mix(in srgb, var(--vscode-descriptionForeground) 40%, transparent); }
+  .st-where { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 6px; overflow-wrap: anywhere; }
+  .st-code { margin-left: 0; max-height: 260px; overflow: auto; }
+  .ln.st-hl { background: color-mix(in srgb, var(--vscode-textLink-foreground) 16%, transparent); }
+  .st-sec { font-size: 11px; font-weight: 600; color: var(--vscode-descriptionForeground); margin: 12px 0 6px; }
+  .st-empty { font-size: 12px; color: var(--vscode-descriptionForeground); }
+  .st-con { border: 1px solid var(--vscode-widget-border, #8884); border-radius: 6px; padding: 7px 9px; margin-bottom: 6px; font-size: 12px; }
+  .st-con.sel { border-color: color-mix(in srgb, var(--vscode-textLink-foreground) 60%, transparent); }
+  .st-ctop { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+  .st-cname { padding: 0; border: 0; background: none; color: var(--vscode-foreground); font-weight: 600; font-size: 12.5px; text-align: left; }
+  .st-cname:hover { color: var(--vscode-textLink-foreground); }
+  .st-lv { flex: none; font-size: 10px; padding: 0 5px; border-radius: 8px; border: 1px solid; }
+  .st-lv.lv1 { color: var(--vscode-testing-iconPassed, #73c991); border-color: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 45%, transparent); }
+  .st-lv.lv2 { color: var(--vscode-textLink-foreground); border-color: color-mix(in srgb, var(--vscode-textLink-foreground) 45%, transparent); }
+  .st-lv.lv3 { color: var(--vscode-editorWarning-foreground); border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground) 45%, transparent); }
+  .st-known { margin-left: auto; display: inline-flex; gap: 2px; flex: none; }
+  .st-known button { padding: 0 6px; border-radius: 8px; font-size: 10.5px; border: 1px solid transparent; background: none; color: var(--vscode-descriptionForeground); }
+  .st-known button:hover { border-color: color-mix(in srgb, var(--vscode-descriptionForeground) 45%, transparent); }
+  .st-known button.on { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); }
+  .st-sum { line-height: 1.5; }
+  .st-ex { margin-top: 6px; padding: 4px 8px; border-radius: 4px; white-space: pre; overflow-x: auto; font-family: var(--vscode-editor-font-family); font-size: 11.5px;
+           background: var(--vscode-textCodeBlock-background, #8881); }
+  .st-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 6px; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .st-foot .link-btn { font-size: 11.5px; }
+  .st-rate { margin-top: 12px; padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, var(--vscode-textLink-foreground) 7%, transparent); }
+  .st-q { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+  .st-btns { display: flex; gap: 6px; }
+  .st-g { flex: 1; padding: 4px 0; border-radius: 4px; font-size: 12px; border: 1px solid var(--vscode-widget-border, #8886); background: transparent; color: var(--vscode-foreground); }
+  .st-g:hover { background: var(--vscode-list-hoverBackground); }
+  .st-g.again.on { border-color: var(--vscode-errorForeground); color: var(--vscode-errorForeground); }
+  .st-g.hard.on { border-color: var(--vscode-editorWarning-foreground); color: var(--vscode-editorWarning-foreground); }
+  .st-g.good.on { border-color: var(--vscode-testing-iconPassed, #73c991); color: var(--vscode-testing-iconPassed, #73c991); }
+  .st-next { margin-top: 6px; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .st-next.ok { color: var(--vscode-testing-iconPassed, #73c991); }
+  /* 처음 화면 — 공부 */
+  .studyh { margin: 4px 0 10px; }
+  .sh-stats { display: flex; gap: 6px; margin: 2px 0 6px; }
+  .sh-stats div { flex: 1; padding: 4px 8px; border-radius: 5px; border: 1px solid var(--vscode-widget-border, #8884); font-size: 10.5px; color: var(--vscode-descriptionForeground); }
+  .sh-stats b { display: block; font-size: 14px; color: var(--vscode-foreground); }
+  .sh-note { font-size: 11.5px; color: var(--vscode-descriptionForeground); padding: 2px 6px; }
+  .sh-sec { font-size: 11px; font-weight: 600; color: var(--vscode-descriptionForeground); margin: 8px 0 4px; }
+  .sh-lv { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 4px; }
+  .sh-lvname { width: 28px; flex: none; font-size: 10.5px; color: var(--vscode-descriptionForeground); }
+  .sh-chip { padding: 1px 8px; border-radius: 10px; font-size: 11px; background: none; color: var(--vscode-foreground);
+             border: 1px solid color-mix(in srgb, var(--vscode-descriptionForeground) 45%, transparent); }
+  .sh-chip.ok { color: var(--vscode-testing-iconPassed, #73c991); border-color: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 55%, transparent); }
+  .sh-chip.weak { color: var(--vscode-editorWarning-foreground); border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground) 55%, transparent); }
+  .sh-chip.on { background: color-mix(in srgb, var(--vscode-focusBorder) 22%, transparent); }
+  .st-con.ai { border-color: color-mix(in srgb, var(--vscode-textLink-foreground) 40%, transparent); }
+  .st-ai { margin-left: auto; font-size: 10.5px; color: var(--vscode-textLink-foreground); }
+  .st-note { margin-top: 5px; padding: 4px 8px; border-left: 3px solid; border-radius: 0 4px 4px 0; line-height: 1.5; }
+  .st-note b { font-weight: 600; }
+  .st-note.here { border-color: var(--vscode-textLink-foreground); background: color-mix(in srgb, var(--vscode-textLink-foreground) 7%, transparent); }
+  .st-note.mis { border-color: var(--vscode-editorWarning-foreground); background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 8%, transparent); }
+  .st-note.con { border-color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--vscode-descriptionForeground) 8%, transparent); }
+  .st-ailine { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 2px 0 4px; font-size: 11.5px; color: var(--vscode-descriptionForeground); }
+  .st-spin { width: 9px; height: 9px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--vscode-textLink-foreground) 35%, transparent);
+             border-top-color: var(--vscode-textLink-foreground); animation: stspin .8s linear infinite; }
+  @keyframes stspin { to { transform: rotate(360deg); } }
+  .sh-report { margin: 6px 0 2px; }
+  .sh-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 4px; }
+  .sh-k { font-size: 10.5px; color: var(--vscode-descriptionForeground); margin-right: 2px; }
+  .sh-maph { display: flex; justify-content: space-between; align-items: center; }
+  .sh-map { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 12px; margin-bottom: 4px; }
+  .sh-col { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; position: relative; z-index: 1; }
+  .sh-col .sh-lvname { width: auto; }
+  .sh-node { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); animation: stpop .35s cubic-bezier(.3,1.6,.5,1) both; }
+  .sh-node.next { animation: stpop .35s cubic-bezier(.3,1.6,.5,1) both, shbreathe 2.6s ease-in-out .6s infinite; }
+  @keyframes shbreathe { 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 22%, transparent); } }
+  .sh-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 0; }
+  .sh-edges path { fill: none; stroke: color-mix(in srgb, var(--vscode-descriptionForeground) 45%, transparent); stroke-width: 1; }
+  .sh-chip.new { color: var(--vscode-textLink-foreground); border-color: color-mix(in srgb, var(--vscode-textLink-foreground) 55%, transparent); }
+  .sh-chip.next { border-style: dashed; border-color: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 60%, transparent); }
+  .sh-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  /* 공부 화면 탭 */
+  .st-tabs { margin: 10px 0 4px; }
+  .st-groups { display: flex; flex-wrap: wrap; gap: 3px; }
+  .st-groups button { padding: 2px 10px; border-radius: 10px; font-size: 11.5px; border: 1px solid transparent; background: none; color: var(--vscode-descriptionForeground); }
+  .st-groups button:hover { color: var(--vscode-foreground); }
+  .st-groups button.on { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent); }
+  .st-sub { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 6px; padding-bottom: 4px; border-bottom: 1px solid var(--vscode-widget-border, #8884); }
+  .st-sub button { padding: 2px 0; border: 0; border-bottom: 2px solid transparent; background: none; font-size: 11.5px; color: var(--vscode-descriptionForeground); }
+  .st-sub button.on { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder); }
+  .st-btn { margin: 6px 6px 0 0; padding: 3px 12px; border-radius: 3px; font-size: 12px; border: 1px solid var(--vscode-widget-border, #8886); background: transparent; color: var(--vscode-foreground); }
+  .st-btn.p { background: var(--vscode-button-background); border-color: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .st-btn:disabled { opacity: .55; }
+  .st-ta { width: 100%; min-height: 64px; margin-top: 4px; resize: vertical; padding: 6px 8px; border-radius: 3px; font: inherit; font-size: 12px;
+           color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, #8886); }
+  .st-ta.code-ta { font-family: var(--vscode-editor-font-family); font-size: 12px; white-space: pre; }
+  .st-in { flex: 1; min-width: 0; padding: 3px 7px; border-radius: 3px; font-family: var(--vscode-editor-font-family); font-size: 12px;
+           color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, #8886); }
+  .st-callbar { display: flex; gap: 6px; align-items: center; margin: 8px 0 4px; }
+  .st-callbar .st-btn { margin: 0; }
+  .st-hints { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+  .sh-chip.on { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent); }
+  .st-mini { margin: 4px 0 0; padding: 4px 8px; max-height: 220px; overflow: auto; }
+  .st-mini, .st-bug, .st-tcode { margin-left: 0; overflow-x: auto; }
+  .st-mini .t, .st-bug .t, .st-tcode .t, .st-code .t { overflow: visible; text-overflow: clip; }
+  .st-code { overflow-x: auto; }
+  .st-loading { margin: 8px 0; }
+  .st-shim { height: 11px; border-radius: 4px; margin: 7px 0; width: 85%;
+             background: linear-gradient(90deg, color-mix(in srgb, var(--vscode-descriptionForeground) 12%, transparent) 25%, color-mix(in srgb, var(--vscode-descriptionForeground) 26%, transparent) 50%, color-mix(in srgb, var(--vscode-descriptionForeground) 12%, transparent) 75%);
+             background-size: 200% 100%; animation: stshim 1.2s infinite; }
+  .st-shim.short { width: 60%; }
+  @keyframes stshim { to { background-position: -200% 0; } }
+  .arrive { animation: starrive .45s ease both; }
+  @keyframes starrive { from { opacity: 0; transform: translateX(14px); } }
+  .st-points { margin-top: 8px; }
+  .st-pt { display: flex; gap: 6px; padding: 3px 0; font-size: 12px; }
+  .st-pv { flex: none; width: 14px; text-align: center; font-weight: 700; }
+  .st-pt.ok .st-pv { color: var(--vscode-testing-iconPassed, #73c991); }
+  .st-pt.partial .st-pv { color: var(--vscode-editorWarning-foreground); }
+  .st-pt.wrong .st-pv { color: var(--vscode-errorForeground); }
+  button.cite { border: 0; cursor: pointer; margin-right: 3px; }
+  .st-alt { border: 1px solid var(--vscode-widget-border, #8884); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; font-size: 12px; }
+  .st-alt.cur { border-color: var(--vscode-focusBorder); }
+  .st-alth { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .st-alth b { margin-right: auto; }
+  .st-pill { font-size: 10.5px; padding: 0 6px; border-radius: 8px; color: var(--vscode-descriptionForeground); border: 1px solid color-mix(in srgb, var(--vscode-descriptionForeground) 40%, transparent); }
+  .st-deep { margin: 4px 0; font-size: 12px; border-left: 2px solid var(--vscode-widget-border, #8886); padding-left: 8px; }
+  .st-deep summary { cursor: pointer; font-weight: 600; }
+  .st-qn { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 10px; }
+  .st-opt { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 5px; padding: 5px 8px; border-radius: 4px; text-align: left; font-family: var(--vscode-editor-font-family); font-size: 12px;
+            border: 1px solid var(--vscode-widget-border, #8886); background: transparent; color: var(--vscode-foreground); transition: border-color .25s, background .25s, opacity .25s; }
+  .st-opt:hover:not(:disabled) { background: var(--vscode-list-hoverBackground); }
+  .st-om { flex: none; width: 17px; height: 17px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; border: 1px solid var(--vscode-descriptionForeground); }
+  .st-opt.ok { border-color: var(--vscode-testing-iconPassed, #73c991); background: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 10%, transparent); }
+  .st-opt.ok .st-om { background: var(--vscode-testing-iconPassed, #73c991); border-color: transparent; color: #111; animation: stpop .35s cubic-bezier(.3,1.7,.5,1); }
+  .st-opt.bad { border-color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 10%, transparent); animation: stshake .35s; }
+  .st-opt.bad .st-om { background: var(--vscode-errorForeground); border-color: transparent; color: #fff; }
+  .st-opt.dim { opacity: .5; }
+  @keyframes stpop { from { transform: scale(0); } }
+  @keyframes stshake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+  .st-score { margin-top: 12px; padding: 10px; border-radius: 6px; text-align: center; background: color-mix(in srgb, var(--vscode-focusBorder) 10%, transparent); }
+  .st-score b { font-size: 15px; display: block; }
+  .st-score .link-btn { margin: 6px 6px 0; }
+  .st-try { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; border-top: 1px solid var(--vscode-widget-border, #8883); font-size: 12px; }
+  .st-try code { flex: none; max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--vscode-editor-font-family); }
+  .st-try.ok span:last-child { color: var(--vscode-descriptionForeground); }
+  .st-try.bad span:last-child { color: var(--vscode-errorForeground); }
+  .st-try.ok .st-pv { color: var(--vscode-testing-iconPassed, #73c991); }
+  .st-try.bad .st-pv { color: var(--vscode-errorForeground); }
+  .st-bug { margin-top: 6px; }
+  .st-mini .ln { padding-left: 4px; }
+  .st-bug .ln { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; white-space: pre; }
+  .st-bug .ln:hover:not(:disabled) { background: var(--vscode-list-hoverBackground); }
+  .st-bug .ln.right { background: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 18%, transparent); animation: stglow 1s ease-out; }
+  .st-bug .ln.wrong { background: color-mix(in srgb, var(--vscode-errorForeground) 16%, transparent); }
+  @keyframes stglow { from { box-shadow: inset 0 0 0 2px var(--vscode-testing-iconPassed, #73c991); } }
+  .st-diffs div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; padding: 3px 0; border-top: 1px solid var(--vscode-widget-border, #8883); font-size: 12px; }
+  .st-diffs code { font-family: var(--vscode-editor-font-family); font-size: 11.5px; }
+  .st-arrow { color: var(--vscode-descriptionForeground); }
+  .st-why { flex-basis: 100%; color: var(--vscode-descriptionForeground); font-size: 11.5px; }
+  .st-rv { margin-top: 6px; padding: 5px 8px; border-left: 3px solid; border-radius: 0 4px 4px 0; font-size: 12px; line-height: 1.5; }
+  .st-rv.fix { border-color: var(--vscode-textLink-foreground); background: color-mix(in srgb, var(--vscode-textLink-foreground) 7%, transparent); }
+  .st-rv.warn { border-color: var(--vscode-editorWarning-foreground); background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 8%, transparent); }
+  .st-rv.good { border-color: var(--vscode-testing-iconPassed, #73c991); background: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 8%, transparent); }
+  /* 실행 따라가기 */
+  .st-player { margin-top: 4px; }
+  .st-ctr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .st-ctr .st-btn { margin: 0; padding: 2px 9px; }
+  .st-prog { flex: 1; min-width: 60px; height: 4px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--vscode-descriptionForeground) 20%, transparent); }
+  .st-prog i { display: block; height: 100%; width: 0; background: var(--vscode-focusBorder); transition: width .3s; }
+  .st-count { font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .st-tcode { position: relative; margin: 8px 0 0; }
+  .st-tcode .ln { position: relative; z-index: 1; }
+  .st-cursor { position: absolute; left: 0; right: 0; top: 0; z-index: 0; opacity: 0; border-left: 3px solid var(--vscode-focusBorder);
+               background: color-mix(in srgb, var(--vscode-focusBorder) 22%, transparent); transition: top .35s ease, height .35s ease, opacity .2s; }
+  .st-say { margin-top: 6px; padding: 5px 8px; min-height: 34px; border-radius: 4px; font-size: 12px; border-left: 3px solid var(--vscode-textLink-foreground);
+            background: color-mix(in srgb, var(--vscode-textLink-foreground) 7%, transparent); }
+  .st-say.flash { animation: stsay .5s; }
+  @keyframes stsay { from { background: color-mix(in srgb, var(--vscode-textLink-foreground) 22%, transparent); } }
+  .st-mem { margin-top: 6px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--vscode-widget-border, #8884); }
+  .st-ml { font-size: 10.5px; font-weight: 600; color: var(--vscode-descriptionForeground); margin: 4px 0 3px; }
+  .st-stack { display: flex; flex-direction: column; gap: 4px; }
+  .st-frame { padding: 3px 7px; border-radius: 4px; font-family: var(--vscode-editor-font-family); font-size: 11.5px; border: 1px solid var(--vscode-widget-border, #8886); }
+  .st-frame.top { border-color: var(--vscode-focusBorder); }
+  .st-frame.push { animation: stpush .35s cubic-bezier(.3,1.4,.5,1); }
+  @keyframes stpush { from { opacity: 0; transform: translateY(-8px) scaleY(.7); } }
+  .st-fh { font-family: var(--vscode-font-family); font-size: 10.5px; font-weight: 600; color: var(--vscode-descriptionForeground); }
+  .st-frame.top .st-fh { color: var(--vscode-foreground); }
+  .st-vr { display: flex; justify-content: space-between; gap: 8px; }
+  .st-val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 2px; }
+  .st-val.flash, .st-ret.flash { animation: stflash .7s; }
+  @keyframes stflash { from { background: color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent); } }
+  .st-obj { margin-bottom: 6px; }
+  .st-ot { font-size: 10.5px; color: var(--vscode-descriptionForeground); }
+  .st-cells { display: flex; flex-wrap: wrap; font-family: var(--vscode-editor-font-family); font-size: 11.5px; }
+  .st-cells span { padding: 1px 7px; margin: 0 -1px -1px 0; border: 1px solid var(--vscode-widget-border, #8886); transition: background .3s, border-color .3s; }
+  .st-cells span.look { border-color: var(--vscode-focusBorder); background: color-mix(in srgb, var(--vscode-focusBorder) 35%, transparent); }
+  .st-cells span.pass { background: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 20%, transparent); }
+  .st-cells span.fail { background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent); color: var(--vscode-descriptionForeground); }
+  .st-cells span.new, .st-cells span.kept { border-color: var(--vscode-testing-iconPassed, #73c991); color: var(--vscode-testing-iconPassed, #73c991); }
+  .st-cells span.new { animation: stpop .4s cubic-bezier(.3,1.7,.5,1); }
+  .st-cells span.empty { color: var(--vscode-descriptionForeground); border-style: dashed; }
+  .st-ret { display: inline-block; padding: 1px 6px; border-radius: 3px; font-family: var(--vscode-editor-font-family); font-size: 11.5px; color: var(--vscode-testing-iconPassed, #73c991); }
+  .st-guessopt { display: flex; align-items: center; gap: 4px; margin-top: 6px; font-size: 11.5px; color: var(--vscode-descriptionForeground); }
+  .st-gscore { color: var(--vscode-foreground); font-weight: 600; }
+  .st-gq { margin-top: 6px; padding: 6px 8px; border-radius: 6px; border: 1px dashed var(--vscode-focusBorder); animation: starrive .3s ease both; }
+  .st-gq .st-q { margin: 0 0 4px; }
+  .st-gres.ok { color: var(--vscode-testing-iconPassed, #73c991); font-weight: 600; }
+  .st-gres.bad { color: var(--vscode-errorForeground); font-weight: 600; }
+  .st-tcode .ln.st-pick { cursor: pointer; }
+  .st-tcode .ln.st-pick:hover { background: color-mix(in srgb, var(--vscode-focusBorder) 25%, transparent); }
+  .st-heat { margin-left: auto; padding: 0 6px; font-size: 10px; border-radius: 6px; align-self: center;
+             color: var(--vscode-foreground); background: color-mix(in srgb, var(--vscode-editorWarning-foreground) calc(var(--h) * 0.4%), transparent); }
+  .st-memgrid { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 22px; }
+  .st-arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+  .st-arrows path { fill: none; stroke: var(--vscode-textLink-foreground); stroke-width: 1.3; opacity: .8; animation: stdraw .5s ease both; stroke-dasharray: 200; }
+  .st-arrows circle { fill: var(--vscode-textLink-foreground); }
+  @keyframes stdraw { from { stroke-dashoffset: 200; } to { stroke-dashoffset: 0; } }
+  .st-val.ref { color: var(--vscode-textLink-foreground); }
+  .st-alias { margin-top: 4px; font-size: 11px; color: var(--vscode-textLink-foreground); }
+  .st-alias:empty { display: none; }
+  .st-cost { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+  .st-cost div { padding: 3px 6px; border-radius: 5px; border: 1px solid var(--vscode-widget-border, #8884); font-size: 10px; color: var(--vscode-descriptionForeground); }
+  .st-cost b { display: block; font-size: 13px; color: var(--vscode-foreground); }
+  .st-chat { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+  .st-me { align-self: flex-end; max-width: 88%; padding: 5px 9px; border-radius: 10px 10px 2px 10px; font-size: 12.5px; white-space: pre-wrap;
+           background: color-mix(in srgb, var(--vscode-focusBorder) 22%, transparent); border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent); }
+  .st-ai { align-self: flex-start; max-width: 96%; font-size: 12.5px; animation: starrive .35s ease both; }
+  .st-who { font-size: 10.5px; color: var(--vscode-textLink-foreground); margin-bottom: 2px; }
+  .st-ai .abody { padding: 5px 9px; border-radius: 10px 10px 10px 2px; border: 1px solid var(--vscode-widget-border, #8884); }
+  .st-err { color: var(--vscode-errorForeground); font-size: 12px; }
+  .st-typing span { display: inline-block; width: 5px; height: 5px; margin-right: 3px; border-radius: 50%; background: var(--vscode-descriptionForeground); animation: stblink 1.2s infinite; }
+  .st-typing span:nth-child(2) { animation-delay: .2s; } .st-typing span:nth-child(3) { animation-delay: .4s; }
+  @keyframes stblink { 50% { opacity: .2; } }
+  /* 이 결과는 왜 나왔나 */
+  .why-btn { flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none; font-size: 12px; color: var(--vscode-descriptionForeground); }
+  .why-btn:hover, .why-btn.on { color: var(--vscode-textLink-foreground); }
+  .why { margin: 6px 0 4px 28px; padding: 6px 8px; border-radius: 6px; font-size: 11.5px; border: 1px solid color-mix(in srgb, var(--vscode-textLink-foreground) 35%, transparent); }
+  .why-step { display: flex; gap: 8px; padding: 4px 0; animation: starrive .4s ease both; }
+  .why-n { flex: none; width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px;
+           background: var(--vscode-focusBorder); color: #fff; }
+  .why-b { flex: 1; min-width: 0; }
+  .why-t { font-weight: 600; }
+  .why-d { color: var(--vscode-descriptionForeground); }
+  .why-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-family: var(--vscode-editor-font-family); font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .why-row.me { color: var(--vscode-foreground); font-weight: 600; }
+  .why-nm { width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .why-track { flex: 1; height: 6px; border-radius: 3px; overflow: hidden; background: color-mix(in srgb, var(--vscode-descriptionForeground) 18%, transparent); }
+  .why-track i { display: block; height: 100%; background: color-mix(in srgb, var(--vscode-textLink-foreground) 55%, transparent); animation: stgrow .7s ease both; transform-origin: left; }
+  .why-row.me .why-track i { background: var(--vscode-textLink-foreground); }
+  @keyframes stgrow { from { transform: scaleX(0); } }
+  .why-sc { width: 40px; text-align: right; }
+  .st-con.ai.arrive { animation: starrive .45s ease both; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
   .keyp { padding: 8px 12px 16px; font-size: 12.5px; }
   .kback { font-size: 12px; margin-bottom: 8px; }
   .ktitle { font-size: 13px; font-weight: 600; margin: 4px 0 8px; }
@@ -1863,6 +2348,7 @@ function getHtml(webview: vscode.Webview): string {
   <div id="banner" class="banner" hidden><b>MOCK</b><span>서버를 부르지 않아요. 샘플 결과만 나옵니다.</span></div>
 
   <section id="keyPanel" class="keyp" hidden></section>
+  <section id="studyPanel" class="studyp" hidden></section>
 
   <div id="header" class="header">
     <form id="form" class="search">
@@ -1899,6 +2385,7 @@ function getHtml(webview: vscode.Webview): string {
     <div id="demo" class="demo" hidden></div>
     <div id="intro">
       <div id="review" class="review" hidden></div>
+      <div id="studyHome" class="studyh" hidden></div>
       <div class="intro">검색 예시 — 저장된 코드 찾기</div>
       <div id="chips" class="chips">
         <button type="button" class="chip" data-kind="search">두 숫자를 더하는 함수</button>
@@ -1914,7 +2401,7 @@ function getHtml(webview: vscode.Webview): string {
         <div class="tip-h">이렇게도 쓸 수 있어요</div>
         <div class="tip-r"><kbd>Ctrl+Alt+S</kbd><span>커서가 있는 함수 저장</span></div>
         <div class="tip-r"><kbd>Ctrl+Alt+A</kbd><span>선택한 코드로 AI에게 묻기</span></div>
-        <div class="tip-r"><kbd>함수 위 글자</kbd><span>💾 저장 · ✦ 묻기 · 🔍 비슷한 코드</span></div>
+        <div class="tip-r"><kbd>함수 위 글자</kbd><span>💾 저장 · ✦ 묻기 · 🔍 비슷한 코드 · 📘 공부</span></div>
         <div class="tip-r"><kbd>Ctrl+Alt+F</kbd><span>어디서든 검색창으로</span></div>
         <div class="tip-r"><kbd>상태 표시줄</kbd><span>Code Memory 를 누르면 전체 메뉴</span></div>
       </div>
@@ -1948,6 +2435,12 @@ function getHtml(webview: vscode.Webview): string {
   const isVagueQuestion = ${isVagueQuestion.toString()};
   const groupDuplicates = ${groupDuplicates.toString()};
   const answerToMarkdown = ${answerToMarkdown.toString()};
+  const STUDY_CONCEPTS = ${studyConceptsJson()};
+  const detectConcepts = ${detectConcepts.toString()};
+  const scheduleNext = ${scheduleNext.toString()};
+  const buildConceptGraph = ${buildConceptGraph.toString()};
+  const weeklyReport = ${weeklyReport.toString()};
+  const dueCards = ${dueCards.toString()};
 
   const MAX_LINES = 6;   // 이보다 긴 코드는 접어서 보여준다
   // 문법 색에 쓰는 키워드 (언어 공통으로 대충 모은 것)
@@ -1983,6 +2476,7 @@ function getHtml(webview: vscode.Webview): string {
     code: ['M8 7l-5 5 5 5', 'M16 7l5 5-5 5'],
     chevdown: ['M6 9l6 6 6-6'],
     trash: ['M4 7h16', 'M10 11v6', 'M14 11v6', 'M6 7l1 13h10l1-13', 'M9 7V4h6v3'],
+    book: ['M4 5a2 2 0 0 1 2-2h13v15H6a2 2 0 0 0-2 2z', 'M4 20a2 2 0 0 1 2-2h13v3H6a2 2 0 0 1-2-1'],
   };
 
   // ── 상태
@@ -2258,12 +2752,39 @@ function getHtml(webview: vscode.Webview): string {
         sfilter = normFilter(prefs.filter);
         renderChips();
         renderReview();
+        renderStudyHome();
         renderDemo();
         updateAskHint();
         vFull.classList.toggle('on', prefs.view === 'full');
         vCompact.classList.toggle('on', prefs.view === 'compact');
         renderHistory();
         if (current) { renderResults(); }
+        break;
+      case 'study':
+        study = msg.study && typeof msg.study === 'object'
+          ? { cards: msg.study.cards || {}, known: msg.study.known || {}, mastered: msg.study.mastered || {} } : { cards: {}, known: {}, mastered: {} };
+        renderStudyHome();
+        break;
+      case 'studyAi':
+        onStudyAi(msg);
+        break;
+      case 'studyRes':
+        onStudyRes(msg);
+        break;
+      case 'traceCmd':
+        if (traceCtl && studyCur && studyCur.tab === 'trace') { if (msg.cmd === 'next') { traceCtl.next(); } else { traceCtl.stop(); } }
+        break;
+      case 'followFail':
+        if (studyCur && studyCur.m && studyCur.m.trace) { studyCur.m.trace.followFail = true; if (studyCur.tab === 'trace') { renderStudy(null); } }
+        break;
+      case 'studyAskDelta':
+        onStudyAsk(msg, false);
+        break;
+      case 'studyAskDone':
+        onStudyAsk(msg, true);
+        break;
+      case 'openStudy':
+        if (msg.result) { openStudy(msg.result); }
         break;
       case 'deleting': {
         list.querySelectorAll('[data-del="' + msg.id + '"]').forEach(function (b) {
@@ -2601,6 +3122,1267 @@ function getHtml(webview: vscode.Webview): string {
       wrap.append(row, xButton('목록에서 빼기 (다시 저장하면 다시 나와요)', function () { markSeen(h.function_name, h.file_path); }));
       reviewBox.append(wrap);
     });
+  }
+
+  // ── 공부 모드 (서버 없이) — 코드에 쓰인 개념 + 내가 고른 이해도로 다음 복습일(간격 반복). 기록은 이 PC 에만
+  const studyPanel = byId('studyPanel'), studyHome = byId('studyHome');
+  let study = { cards: {}, known: {}, mastered: {} };
+  let studyAiSeq = 0;
+  let studyCur = null;       // { r, key, hits, sel, ai, aiState, aiMsg, reqId }
+  const LEVEL_NAMES = { 1: '기초', 2: '중급', 3: '심화' };
+  const GRADE_TEXT = { again: '모름', hard: '헷갈림', good: '알겠음' };
+  const STUDY_MAX = 200;
+  function conceptById(id) { return STUDY_CONCEPTS.find(function (c) { return c.id === id; }); }
+  function studyKey(r) { return [r.project_name || '', r.file_path || '', r.function_name || '', r.language || ''].join('|'); }
+  function saveStudy() { vscode.postMessage({ type: 'study', study: study }); }
+  function dayStart(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); }
+  function daysUntil(iso) { return Math.round((dayStart(new Date(iso)) - dayStart(new Date())) / 86400000); }
+  function untilText(iso) { const n = daysUntil(iso); return n <= 0 ? '오늘' : n === 1 ? '내일' : n + '일 뒤'; }
+  function studyAgo(iso) { const n = -daysUntil(iso); return n <= 0 ? '오늘' : n + '일 전'; }
+  function studyCards() { return Object.keys(study.cards).map(function (k) { return study.cards[k]; }); }
+  function cardAsResult(c) {
+    return { id: c.id, function_name: c.function_name, file_path: c.file_path, project_name: c.project_name,
+      language: c.language, start_line: c.start_line, end_line: c.end_line, code: c.code };
+  }
+
+  // 숫자가 세듯이 바뀜 (동작 줄이기 설정이면 바로)
+  function countUp(node, from, to) {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) { node.textContent = String(to); return; }
+    const n = Math.max(1, Math.min(12, Math.abs(to - from)));
+    for (let i = 0; i <= n; i++) { setTimeout(function () { node.textContent = String(Math.round(from + (to - from) * i / n)); }, 120 + i * 45); }
+  }
+  function studyNote(cls, label, text) {
+    const d = el('div', 'st-note ' + cls);
+    d.append(el('b', '', label), document.createTextNode(text));
+    return d;
+  }
+  function studyGraph() { return buildConceptGraph(studyCards(), study.known || {}, STUDY_CONCEPTS); }
+  // 처음으로 탄탄해진 날을 남긴다 (성장 기록)
+  function updateMastered() {
+    if (!study.mastered) { study.mastered = {}; }
+    const now = new Date().toISOString();
+    studyGraph().forEach(function (n) { if (n.status === 'ok' && n.count > 0 && !study.mastered[n.id]) { study.mastered[n.id] = now; } });
+  }
+  function openStudy(r) {
+    stopTrace();
+    studyCur = { r: r, key: studyKey(r), hits: detectConcepts(String(r.code || ''), r.language, r.function_name, STUDY_CONCEPTS), sel: '', tab: 'concepts', m: {}, hlLines: [] };
+    if (studyCur.hits.length) { studyCur.sel = studyCur.hits[0].id; }
+    if (r._follow) {
+      // 함수 위 "▶ 따라가기" — 실행 따라가기 탭으로 바로, 기록이 오면 자동 재생
+      studyCur.tab = 'trace';
+      const tst = tabState(studyCur, 'trace');
+      tst.call = r._follow.call || '';
+      tst.autoPlay = true;
+      tst.follow = true;
+      studyRequest('trace', 'trace', traceExtra(studyCur, tst.call), true, 'data');
+    }
+    const saved = study.cards[studyCur.key];
+    studyCur.ai = saved && Array.isArray(saved.ai) && saved.code === String(r.code || '').slice(0, 6000) ? saved.ai : null;
+    studyCur.aiState = studyCur.ai ? 'done' : 'off';
+    if (!studyCur.ai) { requestStudyAi(false); }
+    document.body.classList.add('studymode');
+    studyPanel.hidden = false;
+    renderStudy(null);
+    window.scrollTo(0, 0);
+  }
+  // AI 개념 — 확장 본체가 POST /study/concepts (mock 이면 샘플). 같은 코드는 저장해 둔 결과
+  function requestStudyAi(fresh) {
+    const s = studyCur;
+    if (!s) { return; }
+    s.reqId = ++studyAiSeq;
+    s.aiState = 'loading';
+    s.aiMsg = '';
+    vscode.postMessage({ type: 'studyAi', reqId: s.reqId, fresh: !!fresh,
+      req: { code: String(s.r.code || ''), language: s.r.language || '', function_name: s.r.function_name || null } });
+  }
+  function onStudyAi(msg) {
+    const s = studyCur;
+    if (!s || msg.reqId !== s.reqId) { return; }
+    if (msg.error) {
+      s.aiState = msg.kind === 'missing' ? 'missing' : 'error';
+      s.aiMsg = msg.error;
+    } else {
+      s.ai = msg.concepts || [];
+      s.aiState = 'done';
+      s.aiArrived = true;
+      const card = study.cards[s.key];
+      if (card) { card.ai = s.ai; updateMastered(); saveStudy(); }
+    }
+    renderStudy(null);
+  }
+  function aiFor(id) {
+    const s = studyCur;
+    return s && s.ai ? s.ai.find(function (a) { return a.id === id; }) : null;
+  }
+  function closeStudy() {
+    stopTrace();
+    vscode.postMessage({ type: 'followStop' });
+    document.body.classList.remove('studymode');
+    studyPanel.hidden = true;
+    studyCur = null;
+    renderStudyHome();
+  }
+
+  function renderStudy(justRated) {
+    const s = studyCur;
+    if (!s) { return; }
+    const r = s.r;
+    const back = el('button', 'link-btn kback', '← 검색으로');
+    back.type = 'button';
+    back.addEventListener('click', closeStudy);
+    const head = el('div', 'st-title');
+    head.append(el('span', 'st-name', '📘 ' + nameOf(r)), el('span', 'st-chip', (r.language || '?') + ' · 개념 ' + s.hits.length + '개'));
+    const where = el('div', 'st-where', (r.file_path || '') + (r.start_line ? ' : ' + r.start_line + '–' + r.end_line : '') + (r.project_name ? ' · ' + r.project_name : ''));
+
+    // 코드 — 고른 개념이 쓰인 줄을 강조
+    const selHit = s.hits.find(function (h) { return h.id === s.sel; });
+    const lines = String(r.code || '').replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');
+    const code = el('div', 'code st-code');
+    let hlState = null;
+    lines.forEach(function (text, k) {
+      const h = highlight(text, r.language, hlState);
+      hlState = h.state;
+      const on = (s.tab === 'concepts' && selHit && selHit.lines.indexOf(k) >= 0) || (s.hlLines || []).indexOf(k + 1) >= 0;
+      const ln = el('div', on ? 'ln st-hl' : 'ln');
+      ln.append(el('span', 'n', String((r.start_line || 1) + k)), h.node);
+      code.append(ln);
+    });
+    const parts = [back, head, where];
+    if (s.tab !== 'trace') { parts.push(code); }
+    parts.push(studyTabs(s));
+    if (s.tab !== 'concepts') {
+      renderModeTab(s, parts);
+    } else {
+
+    // 개념
+    parts.push(el('div', 'st-sec', '이 코드에 쓰인 개념'));
+    if (!s.hits.length) {
+      const lang = String(r.language || '').toLowerCase();
+      const supported = /^(python|py|typescript|typescriptreact|ts|tsx|javascript|javascriptreact|js|jsx)$/.test(lang);
+      parts.push(el('div', 'st-empty', supported
+        ? '정해 둔 개념 목록에서 찾은 게 없어요. 아래에서 이해도만 남겨도 복습에 들어가요.'
+        : (r.language || '이 언어') + ' 는 아직 개념 찾기를 지원하지 않아요 (Python · JavaScript · TypeScript). 이해도는 남길 수 있어요.'));
+    }
+    s.hits.forEach(function (h) {
+      const c = conceptById(h.id);
+      if (!c) { return; }
+      const box = el('div', 'st-con' + (s.sel === h.id ? ' sel' : ''));
+      const top = el('div', 'st-ctop');
+      const nm = el('button', 'st-cname', c.name);
+      nm.type = 'button';
+      nm.title = '눌러서 이 개념이 쓰인 줄 보기';
+      nm.addEventListener('click', function () { s.sel = s.sel === h.id ? '' : h.id; renderStudy(null); });
+      top.append(nm, el('span', 'st-lv lv' + c.level, LEVEL_NAMES[c.level]));
+      const kn = study.known[c.id];
+      const tg = el('span', 'st-known');
+      [['new', '처음 봄'], ['known', '아는 것']].forEach(function (p) {
+        const b = el('button', kn === p[0] ? 'on' : '', p[1]);
+        b.type = 'button';
+        b.addEventListener('click', function () {
+          if (study.known[c.id] === p[0]) { delete study.known[c.id]; } else { study.known[c.id] = p[0]; }
+          saveStudy();
+          renderStudy(null);
+        });
+        tg.append(b);
+      });
+      top.append(tg);
+      box.append(top);
+      const sum = el('div', 'st-sum', c.summary + ' ');
+      sum.append(el('span', 'cite', h.lines.map(function (i) { return ((r.start_line || 1) + i) + '줄'; }).join(', ')));
+      box.append(sum);
+      const ai = aiFor(h.id);
+      if (ai && ai.in_this_code) { box.append(studyNote('here', '이 코드에서는 ', ai.in_this_code)); }
+      if (s.sel === h.id) {
+        box.append(el('div', 'st-ex', c.example));
+        const mis = (ai && ai.misconception) || c.misconception;
+        const con = (ai && ai.contrast) || c.contrast;
+        if (mis) { box.append(studyNote('mis', '흔한 오해 ', mis)); }
+        if (con) { box.append(studyNote('con', '비슷하지만 다른 것 ', con)); }
+        const foot = el('div', 'st-foot');
+        const doc = el('button', 'link-btn', '📄 공식 문서');
+        doc.type = 'button';
+        doc.title = c.doc;
+        doc.addEventListener('click', function () { vscode.postMessage({ type: 'openUrl', url: c.doc }); });
+        foot.append(doc);
+        const pre = c.prereq.map(conceptById).filter(Boolean).map(function (p) { return p.name; });
+        if (pre.length) { foot.append(el('span', '', '먼저 알면 좋은 것: ' + pre.join(', '))); }
+        const mapBtn = el('button', 'link-btn', '지도에서 보기');
+        mapBtn.type = 'button';
+        mapBtn.addEventListener('click', function () { vscode.postMessage({ type: 'openMap', focus: c.id }); });
+        foot.append(mapBtn);
+        box.append(foot);
+      }
+      parts.push(box);
+    });
+
+    // AI 가 더 찾은 개념 (목록에 없거나 패턴으로 못 찾은 것)
+    const hitIds = s.hits.map(function (h) { return h.id; });
+    (s.ai || []).filter(function (a) { return !a.id || hitIds.indexOf(a.id) < 0; }).forEach(function (a) {
+      const known = a.id ? conceptById(a.id) : null;
+      const key = 'ai:' + a.name;
+      const box = el('div', 'st-con ai' + (s.sel === key ? ' sel' : '') + (s.aiArrived ? ' arrive' : ''));
+      const top = el('div', 'st-ctop');
+      const nm = el('button', 'st-cname', a.name);
+      nm.type = 'button';
+      nm.addEventListener('click', function () { s.sel = s.sel === key ? '' : key; renderStudy(null); });
+      top.append(nm, el('span', 'st-lv lv' + a.level, LEVEL_NAMES[a.level] || '중급'), el('span', 'st-ai', '✦ AI'));
+      box.append(top);
+      const sum = el('div', 'st-sum', (a.summary || (known ? known.summary : '')) + ' ');
+      if (a.lines && a.lines.length) { sum.append(el('span', 'cite', a.lines.map(function (i) { return ((r.start_line || 1) + i - 1) + '줄'; }).join(', '))); }
+      box.append(sum);
+      if (a.in_this_code) { box.append(studyNote('here', '이 코드에서는 ', a.in_this_code)); }
+      if (s.sel === key) {
+        if (a.misconception) { box.append(studyNote('mis', '흔한 오해 ', a.misconception)); }
+        if (a.contrast) { box.append(studyNote('con', '비슷하지만 다른 것 ', a.contrast)); }
+        if (a.prereq && a.prereq.length) { box.append(el('div', 'st-foot', '먼저 알면 좋은 것: ' + a.prereq.join(', '))); }
+      }
+      parts.push(box);
+    });
+    const aiLine = el('div', 'st-ailine');
+    if (s.aiState === 'loading') {
+      parts.push(el('div', 'st-shim'), el('div', 'st-shim short'));
+      aiLine.append(el('span', 'st-spin'), document.createTextNode('✦ AI 가 이 코드에 맞게 더 찾는 중…'));
+    } else if (s.aiState === 'missing') {
+      aiLine.append(document.createTextNode('✦ AI 개념은 서버 준비 후 나와요 (POST /study/concepts). 지금은 패턴으로 찾은 것만.'));
+    } else if (s.aiState === 'error') {
+      aiLine.append(document.createTextNode('✦ ' + s.aiMsg + ' '));
+      const again = el('button', 'link-btn', '다시 시도');
+      again.type = 'button';
+      again.addEventListener('click', function () { requestStudyAi(true); renderStudy(null); });
+      aiLine.append(again);
+    } else if (s.aiState === 'done') {
+      const n = (s.ai || []).length;
+      aiLine.append(document.createTextNode(n ? '✦ AI 설명 ' + n + '개 붙음' : '✦ AI 가 더 찾은 개념은 없어요'));
+      const again = el('button', 'link-btn', ' 새로 받기');
+      again.type = 'button';
+      again.title = '저장해 둔 AI 결과 대신 다시 물어요';
+      again.addEventListener('click', function () { requestStudyAi(true); renderStudy(null); });
+      aiLine.append(again);
+    }
+    parts.push(aiLine);
+    }
+    // 이해도 → 다음 복습일
+    const prev = study.cards[s.key];
+    const rate = el('div', 'st-rate');
+    rate.append(el('div', 'st-q', '이 코드, 얼마나 이해했나요?'));
+    const btns = el('div', 'st-btns');
+    [['again', '모름', '1일 뒤 다시'], ['hard', '헷갈림', '조금 뒤 다시'], ['good', '알겠음', '간격을 늘려요']].forEach(function (g) {
+      const b = el('button', 'st-g ' + g[0] + (justRated && justRated.grade === g[0] ? ' on' : ''), g[1]);
+      b.type = 'button';
+      b.title = g[2];
+      b.addEventListener('click', function () { rateStudy(g[0]); });
+      btns.append(b);
+    });
+    rate.append(btns);
+    if (justRated) {
+      const nx = el('div', 'st-next ok');
+      const dn = daysUntil(justRated.due);
+      nx.append(document.createTextNode('저장했어요 · 다음 복습 '), el('b', '', String(dn)), document.createTextNode('일 뒤 (' + new Date(justRated.due).toLocaleDateString() + ')'));
+      rate.append(nx);
+    } else if (prev) {
+      rate.append(el('div', 'st-next', '지난번 ' + GRADE_TEXT[prev.last] + ' · ' + studyAgo(prev.lastAt) + ' · 다음 복습 ' + untilText(prev.due)));
+    } else {
+      rate.append(el('div', 'st-next', '고르면 복습 목록에 들어가요. 기록은 이 PC 에만 저장돼요.'));
+    }
+    parts.push(rate);
+    studyPanel.replaceChildren.apply(studyPanel, parts);
+    // 도착 애니메이션은 한 번만
+    s.aiArrived = false;
+    if (s.m) { Object.keys(s.m).forEach(function (k) { s.m[k].arrived = false; }); }
+    const days = studyPanel.querySelector('.st-next.ok b');
+    if (justRated && days) { countUp(days, justRated.from || 0, justRated.days); }
+  }
+
+  function rateStudy(grade) {
+    const s = studyCur;
+    if (!s) { return; }
+    const r = s.r;
+    const prev = study.cards[s.key];
+    const now = new Date();
+    const sch = scheduleNext(prev, grade, now);
+    study.cards[s.key] = {
+      key: s.key, id: r.id, name: nameOf(r), function_name: r.function_name || null, file_path: r.file_path || '',
+      project_name: r.project_name || null, language: r.language || '', start_line: r.start_line || 1, end_line: r.end_line || 1,
+      code: String(r.code || '').slice(0, 6000), concepts: s.hits.map(function (h) { return h.id; }),
+      interval: sch.interval, due: sch.due, reps: sch.reps, lapses: sch.lapses,
+      last: grade, lastAt: now.toISOString(), firstAt: prev && prev.firstAt ? prev.firstAt : now.toISOString(), count: (prev && prev.count ? prev.count : 0) + 1,
+      history: ((prev && Array.isArray(prev.history)) ? prev.history : []).concat([{ at: now.toISOString(), grade: grade }]).slice(-20),
+      ai: s.aiState === 'done' ? s.ai : (prev && prev.ai) || null,
+    };
+    updateMastered();
+    const all = studyCards();
+    if (all.length > STUDY_MAX) {
+      all.sort(function (a, b) { return a.lastAt < b.lastAt ? -1 : 1; }).slice(0, all.length - STUDY_MAX).forEach(function (c) { delete study.cards[c.key]; });
+    }
+    saveStudy();
+    renderStudy({ grade: grade, due: sch.due, days: daysUntil(sch.due), from: prev && prev.interval ? Math.min(daysUntil(sch.due), prev.interval) : 0 });
+  }
+
+  // 처음 화면 — 오늘 복습 · 이번 주 리포트 · 작은 개념 지도
+  function renderStudyHome() {
+    const cards = studyCards();
+    studyHome.replaceChildren();
+    if (!cards.length) { studyHome.hidden = true; return; }
+    studyHome.hidden = false;
+    const due = dueCards(cards, new Date());
+    if (prefs.studyHidden) {
+      const more = el('button', 'link-btn', '📘 공부 기록 보기' + (due.length ? ' · 오늘 복습 ' + due.length : ''));
+      more.type = 'button';
+      more.addEventListener('click', function () { prefs.studyHidden = false; vscode.postMessage({ type: 'prefs', prefs: prefs }); renderStudyHome(); });
+      studyHome.append(more);
+      return;
+    }
+    const head = el('div', 'rv-head');
+    const hide = el('button', 'link-btn', '숨기기');
+    hide.type = 'button';
+    hide.addEventListener('click', function () { prefs.studyHidden = true; vscode.postMessage({ type: 'prefs', prefs: prefs }); renderStudyHome(); });
+    head.append(el('span', '', '📘 공부'), hide);
+    const nums = el('div', 'sh-stats');
+    [[cards.length, '공부한 코드'], [studyGraph().filter(function (n) { return n.count > 0; }).length, '개념'], [due.length, '오늘 복습']].forEach(function (p) {
+      const d = el('div', '');
+      d.append(el('b', '', String(p[0])), el('span', '', p[1]));
+      nums.append(d);
+    });
+    studyHome.append(head, nums);
+
+    // 오늘 복습
+    if (due.length) {
+      due.slice(0, 5).forEach(function (c) {
+        const row = el('button', 'rv');
+        row.type = 'button';
+        row.append(el('span', 'rv-name', c.name), el('span', 'rv-meta', GRADE_TEXT[c.last] + ' · ' + studyAgo(c.lastAt)));
+        row.title = '"' + c.name + '" 다시 공부하기';
+        row.addEventListener('click', function () { openStudy(cardAsResult(c)); });
+        studyHome.append(row);
+      });
+      if (due.length > 5) { studyHome.append(el('div', 'sh-note', '외 ' + (due.length - 5) + '개')); }
+    } else {
+      const next = cards.slice().sort(function (a, b) { return a.due < b.due ? -1 : 1; })[0];
+      studyHome.append(el('div', 'sh-note', '오늘 복습할 건 없어요' + (next ? ' · 다음: ' + next.name + ', ' + untilText(next.due) : '')));
+    }
+
+    // 이번 주 약점 리포트
+    const rep = weeklyReport(cards, new Date());
+    if (rep.reviewed || rep.weak.length || rep.stale.length) {
+      const box = el('div', 'sh-report');
+      box.append(el('div', 'sh-sec', '이번 주 · 이해도 ' + rep.reviewed + '번 고름'));
+      if (rep.weak.length) {
+        const line = el('div', 'sh-line');
+        line.append(el('span', 'sh-k', '약한 개념'));
+        rep.weak.forEach(function (w) {
+          const c = conceptById(w.id);
+          const b = el('button', 'sh-chip weak', (c ? c.name : w.id) + ' · ' + w.misses);
+          b.type = 'button';
+          b.title = '모름·헷갈림 ' + w.misses + '번 — 지도에서 보기';
+          b.addEventListener('click', function () { vscode.postMessage({ type: 'openMap', focus: w.id }); });
+          line.append(b);
+        });
+        box.append(line);
+      }
+      if (rep.stale.length) {
+        const line = el('div', 'sh-line');
+        line.append(el('span', 'sh-k', '오래 안 본 코드'));
+        rep.stale.forEach(function (c) {
+          const b = el('button', 'sh-chip', c.name);
+          b.type = 'button';
+          b.title = studyAgo(c.lastAt) + ' 마지막으로 봄';
+          b.addEventListener('click', function () { openStudy(cardAsResult(c)); });
+          line.append(b);
+        });
+        box.append(line);
+      }
+      studyHome.append(box);
+    }
+
+    // 작은 개념 지도 — 공부한 개념 + 다음 추천을 수준별 세로 줄로, 먼저 알 것 → 다음 을 선으로. 누르면 크게 보기에서 그 개념
+    const nodes = studyGraph().filter(function (n) { return n.count > 0 || n.status === 'next'; });
+    if (nodes.length) {
+      const mh = el('div', 'sh-sec sh-maph');
+      const big = el('button', 'link-btn', '⤢ 크게 보기');
+      big.type = 'button';
+      big.addEventListener('click', function () { vscode.postMessage({ type: 'openMap' }); });
+      mh.append(el('span', '', '개념 지도'), big);
+      studyHome.append(mh);
+      const map = el('div', 'sh-map');
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('class', 'sh-edges');
+      map.append(svg);
+      [1, 2, 3].forEach(function (lv) {
+        const col = el('div', 'sh-col');
+        col.append(el('div', 'sh-lvname', LEVEL_NAMES[lv]));
+        nodes.filter(function (n) { return n.level === lv; }).forEach(function (n, i) {
+          const chip = el('button', 'sh-chip sh-node ' + n.status, n.name + (n.ai ? ' ✦' : ''));
+          chip.type = 'button';
+          chip.dataset.id = n.id;
+          chip.style.animationDelay = ((lv - 1) * 120 + i * 40) + 'ms';
+          chip.title = (n.status === 'next' ? '다음 추천 — ' : '') + n.name + (n.count ? ' · 내 코드 ' + n.count + '개' : '') + '\\n' + n.summary;
+          chip.addEventListener('click', function () { vscode.postMessage({ type: 'openMap', focus: n.id }); });
+          col.append(chip);
+        });
+        map.append(col);
+      });
+      studyHome.append(map);
+      requestAnimationFrame(function () {
+        const box = map.getBoundingClientRect();
+        if (!box.width) { return; }
+        const pos = {};
+        map.querySelectorAll('.sh-node').forEach(function (c) { pos[c.dataset.id] = c.getBoundingClientRect(); });
+        nodes.forEach(function (n) {
+          n.prereq.forEach(function (pid) {
+            const a = pos[pid], c = pos[n.id];
+            if (!a || !c) { return; }
+            const x1 = a.right - box.left, y1 = a.top + a.height / 2 - box.top, x2 = c.left - box.left, y2 = c.top + c.height / 2 - box.top;
+            const same = x2 <= x1;
+            const pth = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            pth.setAttribute('d', same
+              ? 'M' + (a.left - box.left) + ' ' + y1 + ' C' + (a.left - box.left - 14) + ' ' + y1 + ' ' + (c.left - box.left - 14) + ' ' + y2 + ' ' + (c.left - box.left) + ' ' + y2
+              : 'M' + x1 + ' ' + y1 + ' C' + (x1 + 12) + ' ' + y1 + ' ' + (x2 - 12) + ' ' + y2 + ' ' + x2 + ' ' + y2);
+            svg.append(pth);
+          });
+        });
+      });
+    }
+    // 성장 · 노트
+    const m = study.mastered || {};
+    const now = new Date();
+    const month = Object.keys(m).filter(function (id) { const d = new Date(m[id]); return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth(); });
+    const foot = el('div', 'sh-foot');
+    foot.append(el('span', '', month.length ? '이번 달 새로 익힌 개념 ' + month.length + '개' : ''));
+    const notes = el('button', 'link-btn', '📝 공부 노트 내보내기');
+    notes.type = 'button';
+    notes.title = '개념 설명 · 내 코드 · 이해도를 마크다운 문서로';
+    notes.addEventListener('click', function () { vscode.postMessage({ type: 'exportNotes' }); });
+    foot.append(notes);
+    studyHome.append(foot);
+  }
+
+  // ── 공부 화면 탭 — 이해(개념·내 말로·왜 이렇게) · 연습(문제·실행 따라가기·깨뜨려 보기·바꿔 보기·버그 찾기) · 다른 언어로 · 리뷰
+  const STUDY_GROUPS = [
+    { label: '이해', tabs: [['concepts', '개념'], ['explain', '내 말로'], ['why', '왜 이렇게']] },
+    { label: '연습', tabs: [['quiz', '문제'], ['trace', '실행 따라가기'], ['break', '깨뜨려 보기'], ['task', '바꿔 보기'], ['bug', '버그 찾기']] },
+    { label: '다른 언어로', tabs: [['translate', '다른 언어로']] },
+    { label: '리뷰', tabs: [['review', '리뷰']] },
+    { label: '✦ 묻기', tabs: [['ask', '묻기']] },
+  ];
+  const AUTO_LOAD = { why: 'why', quiz: 'quiz', task: 'task', bug: 'bug', review: 'review' };
+  let studyReqSeq = 0;
+  function tabState(s, tab) {
+    if (!s.m) { s.m = {}; }
+    if (!s.m[tab]) { s.m[tab] = { state: 'idle' }; }
+    return s.m[tab];
+  }
+  function studyTabs(s) {
+    const wrap = el('div', 'st-tabs');
+    const groupOf = function (tab) { return STUDY_GROUPS.find(function (g) { return g.tabs.some(function (t) { return t[0] === tab; }); }); };
+    const cur = groupOf(s.tab) || STUDY_GROUPS[0];
+    const top = el('div', 'st-groups');
+    STUDY_GROUPS.forEach(function (g) {
+      const b = el('button', g === cur ? 'on' : '', g.label);
+      b.type = 'button';
+      b.addEventListener('click', function () { setStudyTab(g.tabs[0][0]); });
+      top.append(b);
+    });
+    wrap.append(top);
+    if (cur.tabs.length > 1) {
+      const sub = el('div', 'st-sub');
+      cur.tabs.forEach(function (t) {
+        const b = el('button', t[0] === s.tab ? 'on' : '', t[1]);
+        b.type = 'button';
+        b.addEventListener('click', function () { setStudyTab(t[0]); });
+        sub.append(b);
+      });
+      wrap.append(sub);
+    }
+    return wrap;
+  }
+  function setStudyTab(tab) {
+    const s = studyCur;
+    if (!s) { return; }
+    if (s.tab === 'trace' && tab !== 'trace') { stopTrace(); vscode.postMessage({ type: 'followStop' }); }
+    s.tab = tab;
+    s.hlLines = [];
+    const st = tabState(s, tab);
+    if (AUTO_LOAD[tab] && st.state === 'idle') { studyRequest(tab, AUTO_LOAD[tab], {}, false, 'data'); }
+    if (tab === 'trace' && st.state === 'idle') { studyRequest('trace', 'trace', traceExtra(s, st.call), false, 'data'); }
+    renderStudy(null);
+  }
+  // 확장 본체 → POST /study/{mode}. slot: 결과를 어디에 담을지 (data = 탭 내용, run = 채점·실행 결과)
+  function studyRequest(tab, mode, extra, fresh, slot) {
+    const s = studyCur;
+    if (!s) { return; }
+    const st = tabState(s, tab);
+    st.reqId = ++studyReqSeq;
+    st.slot = slot || 'data';
+    st[st.slot === 'data' ? 'state' : 'runState'] = 'loading';
+    st.msg = '';
+    const req = Object.assign({ code: String(s.r.code || ''), language: s.r.language || '', function_name: s.r.function_name || null }, extra || {});
+    vscode.postMessage({ type: 'studyReq', reqId: st.reqId, mode: mode, fresh: !!fresh, req: req });
+  }
+  // 실행 기록 요청에 붙이는 것 — 호출, 편집기에서 따라가기용 위치
+  function traceExtra(s, call) {
+    const x = { target: { uri: s.r._uri || undefined, file_path: s.r.file_path || undefined, start_line: s.r.start_line || 1, code: String(s.r.code || '') } };
+    if (call) { x.call = call; }
+    return x;
+  }
+  function onStudyRes(msg) {
+    const s = studyCur;
+    if (!s || !s.m) { return; }
+    const tab = Object.keys(s.m).find(function (k) { return s.m[k].reqId === msg.reqId; });
+    if (!tab) { return; }
+    const st = s.m[tab];
+    const stateKey = st.slot === 'data' ? 'state' : 'runState';
+    if (msg.error) {
+      st[stateKey] = msg.kind === 'missing' ? 'missing' : msg.kind === 'declined' ? 'missing' : 'error';
+      st.msg = msg.error;
+    } else {
+      st[stateKey] = 'done';
+      if (st.slot === 'data') {
+        st.data = msg.data;
+        st.arrived = true;
+        if (tab === 'quiz') { st.qi = 0; st.picked = -1; st.right = 0; st.done = false; }
+        if (tab === 'task' && msg.data) { st.code = msg.data.starter || ''; st.run = null; }
+        if (tab === 'bug') { st.picked = 0; }
+        if (tab === 'trace') { st.step = -1; stopTrace(); st.local = !!msg.local; if (msg.data && msg.data.call) { st.call = msg.data.call; } }
+      } else if (tab === 'break') {
+        st.tried = (msg.data.cases || []).concat(st.tried || []).slice(0, 12);
+      } else {
+        st.run = msg.data;
+      }
+    }
+    if (s.tab === tab) { renderStudy(null); }
+  }
+  // 불러오는 중 · 서버에 없음 · 오류 공통 표시. 내용이 있으면 null
+  function studyStatus(st, tab, mode, extra) {
+    if (st.state === 'loading') {
+      const d = el('div', 'st-loading');
+      d.append(el('div', 'st-shim'), el('div', 'st-shim short'), el('div', 'st-ailine', '✦ 만드는 중…'));
+      return d;
+    }
+    if (st.state === 'missing' || st.state === 'error') {
+      const d = el('div', 'st-ailine');
+      d.append(document.createTextNode((st.state === 'missing' ? '' : '✦ ') + st.msg + ' '));
+      const again = el('button', 'link-btn', '다시 시도');
+      again.type = 'button';
+      again.addEventListener('click', function () { studyRequest(tab, mode, extra || {}, true, 'data'); renderStudy(null); });
+      d.append(again);
+      return d;
+    }
+    return null;
+  }
+  function fresher(tab, mode, label, extra) {
+    const b = el('button', 'link-btn', label || '새로 만들기');
+    b.type = 'button';
+    b.addEventListener('click', function () { studyRequest(tab, mode, extra || {}, true, 'data'); renderStudy(null); });
+    return b;
+  }
+  function cites(lines, r) {
+    const box = el('span', '');
+    (lines || []).forEach(function (n) {
+      const c = el('button', 'cite', ((r.start_line || 1) + n - 1) + '줄');
+      c.type = 'button';
+      c.title = '코드에서 이 줄 보기';
+      c.addEventListener('click', function () { studyCur.hlLines = [n]; renderStudy(null); });
+      box.append(c);
+    });
+    return box;
+  }
+  function preCode(text, lang, cls) {
+    const box = el('div', 'code st-mini ' + (cls || ''));
+    let hs = null;
+    String(text || '').replace(/\\r\\n/g, '\\n').split('\\n').forEach(function (line) {
+      const h = highlight(line, lang, hs);
+      hs = h.state;
+      const ln = el('div', 'ln');
+      ln.append(h.node);
+      box.append(ln);
+    });
+    return box;
+  }
+
+  function renderModeTab(s, parts) {
+    const r = s.r;
+    const st = tabState(s, s.tab);
+    const tab = s.tab;
+    if (tab === 'ask') { renderStudyAsk(s, st, parts); return; }
+    if (tab === 'explain') {
+      parts.push(el('div', 'st-q', '이 코드가 하는 일을 내 말로 설명해 보세요'));
+      const ta = el('textarea', 'st-ta');
+      ta.value = st.answer || '';
+      ta.placeholder = '짧아도 괜찮아요. 예: 리스트에서 … 만 골라서 …';
+      ta.addEventListener('input', function () { st.answer = ta.value; });
+      const go = el('button', 'st-btn p', st.state === 'loading' ? '확인 중…' : '확인');
+      go.type = 'button';
+      go.disabled = st.state === 'loading';
+      go.addEventListener('click', function () {
+        if (!String(st.answer || '').trim()) { ta.focus(); return; }
+        studyRequest('explain', 'explain', { answer: st.answer }, true, 'data');
+        renderStudy(null);
+      });
+      parts.push(ta, go);
+      const status = st.state === 'loading' ? null : studyStatus(st, 'explain', 'explain', { answer: st.answer });
+      if (status) { parts.push(status); }
+      if (st.state === 'done' && st.data) {
+        const list = el('div', 'st-points' + (st.arrived ? ' arrive' : ''));
+        st.data.points.forEach(function (p) {
+          const row = el('div', 'st-pt ' + p.verdict);
+          row.append(el('span', 'st-pv', p.verdict === 'ok' ? '✓' : p.verdict === 'wrong' ? '✗' : '△'), el('span', '', p.text + ' '));
+          row.lastChild.append(cites(p.lines, r));
+          list.append(row);
+        });
+        parts.push(list);
+        parts.push(el('div', 'st-next', '✓ 맞게 짚음 · △ 빠짐 · ✗ 잘못 이해. 코드에 있는 것만 짚어요.'));
+      }
+      return;
+    }
+    const status = studyStatus(st, tab, tab === 'break' ? 'run' : (AUTO_LOAD[tab] || tab), tab === 'translate' ? { target: st.target } : tab === 'trace' ? { call: st.call } : {});
+    if (tab === 'why') {
+      if (status) { parts.push(status); return; }
+      if (!st.data) { return; }
+      const d = st.data;
+      parts.push(el('div', 'st-sec', '같은 일을 하는 다른 방법'));
+      d.alternatives.forEach(function (a, i) {
+        const box = el('div', 'st-alt' + (i === 0 ? ' cur' : '') + (st.arrived ? ' arrive' : ''));
+        box.style.animationDelay = (i * 70) + 'ms';
+        const head = el('div', 'st-alth');
+        head.append(el('b', '', a.label));
+        [['속도', a.speed], ['메모리', a.memory], ['읽기', a.readability]].forEach(function (p) { if (p[1]) { head.append(el('span', 'st-pill', p[0] + ' ' + p[1])); } });
+        box.append(head, preCode(a.code, r.language));
+        if (a.note) { box.append(el('div', 'st-next', a.note)); }
+        parts.push(box);
+      });
+      if (d.complexity.time || d.complexity.space) {
+        parts.push(studyNote('here', '복잡도 ', '시간 ' + d.complexity.time + ' · 메모리 ' + d.complexity.space + (d.complexity.note ? ' — ' + d.complexity.note : '')));
+      }
+      if (d.deeper.length) {
+        parts.push(el('div', 'st-sec', '한 단계 더'));
+        d.deeper.forEach(function (x) {
+          const det = el('details', 'st-deep');
+          det.append(el('summary', '', x.title), el('div', 'st-sum', x.text));
+          if (x.doc) {
+            const a = el('button', 'link-btn', '📄 문서');
+            a.type = 'button';
+            a.addEventListener('click', function () { vscode.postMessage({ type: 'openUrl', url: x.doc }); });
+            det.append(a);
+          }
+          parts.push(det);
+        });
+      }
+      parts.push(fresher('why', 'why'));
+      return;
+    }
+    if (tab === 'quiz') {
+      if (status) { parts.push(status); return; }
+      if (!st.data) { return; }
+      const qs = st.data.questions;
+      if (st.done) {
+        const box = el('div', 'st-score');
+        box.append(el('b', '', qs.length + '문제 중 ' + st.right + '개 맞힘'),
+          el('div', 'st-next', st.right === qs.length ? '다 맞혔어요!' : '틀린 게 있어서 복습 목록에 넣었어요.'));
+        const again = fresher('quiz', 'quiz', '새 문제 풀기');
+        const retry = el('button', 'link-btn', '같은 문제 다시');
+        retry.type = 'button';
+        retry.addEventListener('click', function () { st.qi = 0; st.picked = -1; st.right = 0; st.done = false; renderStudy(null); });
+        box.append(retry, again);
+        parts.push(box);
+        return;
+      }
+      const q = qs[st.qi];
+      parts.push(el('div', 'st-qn', '문제 ' + (st.qi + 1) + ' / ' + qs.length + ({ output: ' · 결과 맞히기', blank: ' · 빈칸', bug: ' · 버그', concept: '' }[q.kind] || '')));
+      parts.push(el('div', 'st-q', q.prompt));
+      if (q.code) { parts.push(preCode(q.code, r.language)); }
+      q.choices.forEach(function (c, i) {
+        const picked = st.picked >= 0;
+        const cls = !picked ? '' : i === q.answer ? ' ok' : i === st.picked ? ' bad' : ' dim';
+        const b = el('button', 'st-opt' + cls);
+        b.type = 'button';
+        b.disabled = picked;
+        b.append(el('span', 'st-om', !picked ? String.fromCharCode(65 + i) : i === q.answer ? '✓' : i === st.picked ? '✗' : ''), el('span', '', c));
+        b.addEventListener('click', function () {
+          st.picked = i;
+          if (i === q.answer) { st.right += 1; }
+          renderStudy(null);
+        });
+        parts.push(b);
+      });
+      if (st.picked >= 0) {
+        parts.push(studyNote(st.picked === q.answer ? 'here' : 'mis', st.picked === q.answer ? '맞았어요 ' : '아쉬워요 ', q.explain));
+        const nx = el('button', 'st-btn p', st.qi + 1 < qs.length ? '다음 →' : '결과 보기');
+        nx.type = 'button';
+        nx.addEventListener('click', function () {
+          if (st.qi + 1 < qs.length) { st.qi += 1; st.picked = -1; renderStudy(null); return; }
+          st.done = true;
+          const wrong = qs.length - st.right;
+          if (wrong) { rateStudy(wrong * 2 > qs.length ? 'again' : 'hard'); } else { renderStudy(null); }
+        });
+        parts.push(nx);
+      }
+      return;
+    }
+    if (tab === 'trace') {
+      const bar = el('div', 'st-callbar');
+      const inp = el('input', 'st-in');
+      inp.value = st.call || (st.data && st.data.call) || '';
+      inp.placeholder = (r.function_name || 'f') + '(…)  예: 넣어 볼 값';
+      inp.addEventListener('input', function () { st.call = inp.value; });
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.isComposing) { go.click(); } });
+      const go = el('button', 'st-btn', '실행');
+      go.type = 'button';
+      go.addEventListener('click', function () { st.call = inp.value; studyRequest('trace', 'trace', traceExtra(s, st.call), true, 'data'); renderStudy(null); });
+      bar.append(inp, go);
+      parts.push(bar);
+      if (status) { parts.push(status); return; }
+      if (!st.data) { return; }
+      if (!st.data.steps.length) { parts.push(el('div', 'st-empty', '이 코드는 실행 기록을 만들 수 없어요. 호출 모양(함수 이름과 값)을 바꿔 보세요.')); return; }
+      parts.push(tracePlayer(s, st));
+      return;
+    }
+    if (tab === 'break') {
+      parts.push(el('div', 'st-q', '이 코드가 이상하게 동작하는 입력을 찾아보세요'));
+      const fn = r.function_name || 'f';
+      const hints = el('div', 'st-hints');
+      [['빈 값', '[]'], ['0', '0'], ['음수', '-3'], ['None', 'None'], ['아주 큰 값', '10**9'], ['다른 타입', '"a"'], ['실수', '[1.5, 2.0]']].forEach(function (h) {
+        const b = el('button', 'sh-chip', h[0]);
+        b.type = 'button';
+        b.title = fn + '(' + h[1] + ')';
+        b.addEventListener('click', function () { st.call = fn + '(' + h[1] + ')'; renderStudy(null); });
+        hints.append(b);
+      });
+      parts.push(hints);
+      const bar = el('div', 'st-callbar');
+      const inp = el('input', 'st-in');
+      inp.value = st.call || fn + '()';
+      inp.addEventListener('input', function () { st.call = inp.value; });
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.isComposing) { go.click(); } });
+      const go = el('button', 'st-btn p', st.runState === 'loading' ? '실행 중…' : '넣어보기');
+      go.type = 'button';
+      go.disabled = st.runState === 'loading';
+      go.addEventListener('click', function () { st.call = inp.value; if (!st.call.trim()) { return; } studyRequest('break', 'run', { calls: [st.call] }, true, 'run'); renderStudy(null); });
+      bar.append(inp, go);
+      parts.push(bar);
+      if (st.runState === 'missing' || st.runState === 'error') { parts.push(el('div', 'st-ailine', st.msg)); }
+      const tried = st.tried || [];
+      if (tried.length) {
+        const broke = tried.filter(function (c) { return c.error; }).length;
+        parts.push(el('div', 'st-sec', '넣어 본 것 ' + tried.length + '개' + (broke ? ' · 깨진 것 ' + broke + '개' : '')));
+        tried.forEach(function (c, i) {
+          const row = el('div', 'st-try ' + (c.error ? 'bad' : 'ok') + (i === 0 ? ' arrive' : ''));
+          row.append(el('code', '', c.call), el('span', '', c.error ? '💥 ' + c.error : '→ ' + c.output));
+          parts.push(row);
+        });
+        if (broke) { parts.push(studyNote('mis', '찾은 약점 ', '이런 입력을 어떻게 다룰지(오류를 낼지, 빈 결과를 줄지) 정해 두면 좋아요. "바꿔 보기"나 "리뷰"에서 고쳐 보세요.')); }
+      }
+      return;
+    }
+    if (tab === 'task') {
+      if (status) { parts.push(status); return; }
+      if (!st.data) { return; }
+      parts.push(el('div', 'st-q', '과제: ' + st.data.task));
+      const ta = el('textarea', 'st-ta code-ta');
+      ta.value = st.code || '';
+      ta.spellcheck = false;
+      ta.rows = Math.min(12, Math.max(3, String(st.code || '').split('\\n').length + 1));
+      ta.addEventListener('input', function () { st.code = ta.value; });
+      ta.addEventListener('keydown', function (e) {
+        if (e.key === 'Tab') { e.preventDefault(); const p = ta.selectionStart; ta.value = ta.value.slice(0, p) + '    ' + ta.value.slice(ta.selectionEnd); ta.selectionStart = ta.selectionEnd = p + 4; st.code = ta.value; }
+      });
+      parts.push(ta);
+      const go = el('button', 'st-btn p', st.runState === 'loading' ? '채점 중…' : '테스트 돌리기');
+      go.type = 'button';
+      go.disabled = st.runState === 'loading';
+      go.addEventListener('click', function () { studyRequest('task', 'run', { code: st.code, tests: st.data.tests }, true, 'run'); renderStudy(null); });
+      parts.push(go, fresher('task', 'task', '다른 과제'));
+      if (st.runState === 'missing' || st.runState === 'error') { parts.push(el('div', 'st-ailine', st.msg)); }
+      const res = st.run && st.run.cases ? st.run.cases : null;
+      parts.push(el('div', 'st-sec', '테스트 ' + st.data.tests.length + '개' + (res ? ' · 통과 ' + res.filter(function (c) { return c.ok; }).length : '')));
+      st.data.tests.forEach(function (t, i) {
+        const c = res ? res[i] : null;
+        const row = el('div', 'st-try ' + (!c ? '' : c.ok ? 'ok' : 'bad') + (c ? ' arrive' : ''));
+        row.style.animationDelay = (i * 80) + 'ms';
+        row.append(el('code', '', t.call), el('span', '', '→ ' + t.expected + (c && !c.ok ? '  (받은 값 ' + (c.error || c.output) + ')' : '')));
+        row.prepend(el('span', 'st-pv', !c ? '·' : c.ok ? '✓' : '✗'));
+        parts.push(row);
+      });
+      if (res && res.every(function (c) { return c.ok; })) { parts.push(studyNote('here', '통과! ', '모든 테스트를 통과했어요.')); }
+      return;
+    }
+    if (tab === 'bug') {
+      if (status) { parts.push(status); return; }
+      if (!st.data) { return; }
+      parts.push(el('div', 'st-q', '버그를 하나 심었어요. 버그가 있는 줄을 눌러 보세요'));
+      const box = el('div', 'code st-bug');
+      let hs = null;
+      st.data.code.split('\\n').forEach(function (line, i) {
+        const h = highlight(line, r.language, hs);
+        hs = h.state;
+        const n = i + 1;
+        const cls = st.picked ? (n === st.data.line ? ' right' : n === st.picked ? ' wrong' : '') : '';
+        const ln = el('button', 'ln' + cls);
+        ln.type = 'button';
+        ln.disabled = !!st.picked;
+        ln.append(el('span', 'n', String(n)), h.node);
+        ln.addEventListener('click', function () { st.picked = n; renderStudy(null); });
+        box.append(ln);
+      });
+      parts.push(box);
+      if (st.picked) {
+        const ok = st.picked === st.data.line;
+        parts.push(studyNote(ok ? 'here' : 'mis', ok ? '찾았어요! ' : '아쉬워요 — ' + st.data.line + '번째 줄이에요. ', st.data.explain + (st.data.fixed_line ? ' 원래는 ' + st.data.fixed_line : '')));
+        parts.push(fresher('bug', 'bug', '다른 버그'));
+      }
+      return;
+    }
+    if (tab === 'translate') {
+      const here = String(r.language || '').toLowerCase();
+      const targets = [['python', 'Python'], ['typescript', 'TypeScript'], ['javascript', 'JavaScript'], ['java', 'Java'], ['c', 'C'], ['go', 'Go']]
+        .filter(function (t) { return t[0] !== here && !(here === 'typescriptreact' && t[0] === 'typescript'); });
+      if (!st.target) { st.target = targets[0][0]; }
+      const chips = el('div', 'st-hints');
+      targets.forEach(function (t) {
+        const b = el('button', 'sh-chip' + (st.target === t[0] ? ' on' : ''), t[1]);
+        b.type = 'button';
+        b.addEventListener('click', function () { st.target = t[0]; studyRequest('translate', 'translate', { target: t[0] }, false, 'data'); renderStudy(null); });
+        chips.append(b);
+      });
+      parts.push(chips);
+      if (st.state === 'idle') { studyRequest('translate', 'translate', { target: st.target }, false, 'data'); parts.push(studyStatus(tabState(s, 'translate'), 'translate', 'translate', { target: st.target })); return; }
+      if (status) { parts.push(status); return; }
+      if (!st.data) { return; }
+      parts.push(el('div', 'st-sec', (targets.find(function (t) { return t[0] === st.target; }) || ['', st.target])[1] + ' 로'));
+      parts.push(preCode(st.data.code, st.target, st.arrived ? 'arrive' : ''));
+      const acts = el('div', 'st-foot');
+      const cp = el('button', 'link-btn', '복사');
+      cp.type = 'button';
+      cp.addEventListener('click', function () { vscode.postMessage({ type: 'copy', code: st.data.code }); cp.textContent = '복사됨'; });
+      const ins = el('button', 'link-btn', '편집기에 삽입');
+      ins.type = 'button';
+      ins.addEventListener('click', function () { vscode.postMessage({ type: 'insert', code: st.data.code }); });
+      acts.append(cp, ins);
+      parts.push(acts);
+      if (st.data.notes.length) {
+        parts.push(el('div', 'st-sec', '달라지는 부분'));
+        const tbl = el('div', 'st-diffs');
+        st.data.notes.forEach(function (n) {
+          const row = el('div', '');
+          row.append(el('code', '', n.from), el('span', 'st-arrow', '→'), el('code', '', n.to), el('span', 'st-why', n.why));
+          tbl.append(row);
+        });
+        parts.push(tbl);
+      }
+      return;
+    }
+    if (tab === 'review') {
+      if (status) { parts.push(status); return; }
+      if (!st.data) { return; }
+      st.data.items.forEach(function (it, i) {
+        const d = el('div', 'st-rv ' + it.kind + (st.arrived ? ' arrive' : ''));
+        d.style.animationDelay = (i * 70) + 'ms';
+        d.append(el('b', '', it.title + ' '), document.createTextNode(it.text + ' '), cites(it.lines, r));
+        parts.push(d);
+      });
+      if (st.data.improved_code) {
+        const b = el('button', 'st-btn', '고친 코드 비교');
+        b.type = 'button';
+        b.addEventListener('click', function () { vscode.postMessage({ type: 'diffText', left: String(r.code || ''), right: st.data.improved_code, language: r.language || '', title: nameOf(r) + ' ↔ 리뷰 반영' }); });
+        parts.push(b);
+      }
+      parts.push(fresher('review', 'review', '다시 리뷰'));
+    }
+  }
+
+  // ── 공부 화면 "✦ 묻기" — 지금 코드에 대해 이어서 묻기. 코드는 확장 본체가 질문에 붙여 보낸다
+  let studyAskSeq = 0;
+  function renderStudyAsk(s, st, parts) {
+    const r = s.r;
+    if (!st.turns) { st.turns = []; }
+    const list = el('div', 'st-chat');
+    if (!st.turns.length) { list.append(el('div', 'st-next', '이 코드에 대해 뭐든 물어보세요. 지금 코드가 같이 넘어가요.')); }
+    st.turns.forEach(function (t) {
+      list.append(el('div', 'st-me', t.q));
+      const a = el('div', 'st-ai' + (t.pending ? ' pending' : ''));
+      a.append(el('div', 'st-who', '✦ AI · 이 코드 기준'));
+      if (t.err) { a.append(el('div', 'st-err', t.err)); }
+      else if (t.pending && !t.a) { const dots = el('div', 'st-typing'); dots.append(el('span'), el('span'), el('span')); a.append(dots); }
+      else { a.append(citedText(t.a || '', t.sources || [])); }
+      list.append(a);
+    });
+    parts.push(list);
+    const names = s.hits.map(function (h) { const c = conceptById(h.id); return c ? c.name : ''; }).filter(Boolean);
+    const sugg = el('div', 'st-hints');
+    [names[0] ? names[0] + ' 가 여기서 왜 필요해?' : '', '왜 이렇게 짰어?', '테스트 코드 만들어줘', '더 짧게 쓸 수 있어?', '어떤 입력에서 깨져?'].filter(Boolean).slice(0, 4).forEach(function (q) {
+      const b = el('button', 'sh-chip', q);
+      b.type = 'button';
+      b.addEventListener('click', function () { sendStudyAsk(s, st, q); });
+      sugg.append(b);
+    });
+    parts.push(sugg);
+    const ta = el('textarea', 'st-ta');
+    ta.rows = 2;
+    ta.placeholder = '이 코드에 대해 물어보세요… (Enter 보내기 · Shift+Enter 줄바꿈)';
+    ta.value = st.draft || '';
+    ta.addEventListener('input', function () { st.draft = ta.value; });
+    ta.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendStudyAsk(s, st, ta.value); }
+    });
+    const busy = st.turns.some(function (t) { return t.pending; });
+    const send = el('button', 'st-btn p', busy ? '멈추기' : '보내기');
+    send.type = 'button';
+    send.addEventListener('click', function () {
+      if (busy) { vscode.postMessage({ type: 'studyAskCancel' }); return; }
+      sendStudyAsk(s, st, ta.value);
+    });
+    parts.push(ta, send);
+    if (st.turns.length) {
+      const clear = el('button', 'link-btn', ' 새로 묻기');
+      clear.type = 'button';
+      clear.addEventListener('click', function () { st.turns = []; renderStudy(null); });
+      parts.push(clear);
+    }
+    requestAnimationFrame(function () { const last = studyPanel.querySelector('.st-chat > :last-child'); if (last && st.turns.length) { last.scrollIntoView({ block: 'nearest' }); } });
+  }
+  function sendStudyAsk(s, st, text) {
+    const q = String(text || '').trim();
+    if (!q || st.turns.some(function (t) { return t.pending; })) { return; }
+    const history = st.turns.filter(function (t) { return t.a && !t.err; }).slice(-2).map(function (t) { return { q: t.q, answer: t.a }; });
+    const turn = { q: q, a: '', pending: true, reqId: ++studyAskSeq };
+    st.turns.push(turn);
+    st.draft = '';
+    vscode.postMessage({ type: 'studyAsk', reqId: turn.reqId, q: q, history: history, code: String(s.r.code || ''), language: s.r.language || '', name: nameOf(s.r) });
+    renderStudy(null);
+  }
+  function onStudyAsk(msg, done) {
+    const s = studyCur;
+    if (!s || !s.m || !s.m.ask || !s.m.ask.turns) { return; }
+    const t = s.m.ask.turns.find(function (x) { return x.reqId === msg.reqId; });
+    if (!t) { return; }
+    if (!done) { t.a += msg.text || ''; }
+    else {
+      t.pending = false;
+      if (msg.error) { t.err = msg.error; } else { t.a = msg.answer || t.a; t.sources = msg.sources || []; }
+    }
+    if (s.tab === 'ask') { renderStudy(null); }
+  }
+
+  // ── 실행 따라가기 플레이어 — 서버(격리 실행)가 준 기록을 재생. 줄 커서가 미끄러지고, 스택 칸이 쌓이고 빠진다
+  //    맞혀 보며 보기: 다음 줄 · 바뀔 값을 먼저 고르고 넘어간다. 아래에 실행 기록으로 잰 비용 (줄별 횟수 · 스택 깊이)
+  let traceTimer = null;
+  let traceSpeed = 850;
+  function stopTrace() { clearTimeout(traceTimer); traceTimer = null; }
+  // 다음 단계에서 맨 위 칸의 값 중 처음 바뀌는 것 — 맞히기 문제로
+  function nextChange(steps, k) {
+    const a = steps[k], b = steps[k + 1];
+    if (!b || !b.frames.length) { return null; }
+    const top = b.frames[b.frames.length - 1];
+    const before = a && a.frames.length === b.frames.length ? a.frames[a.frames.length - 1] : null;
+    const name = Object.keys(top.vars).find(function (v) { return !before || before.vars[v] !== top.vars[v]; });
+    if (!name) { return null; }
+    const answer = top.vars[name];
+    const pool = [];
+    steps.forEach(function (st) { st.frames.forEach(function (f) { if (f.vars[name] !== undefined && f.vars[name] !== answer && pool.indexOf(f.vars[name]) < 0) { pool.push(f.vars[name]); } }); });
+    if (!pool.length) { return null; }
+    const choices = [answer].concat(pool.slice(0, 2)).sort();
+    return { name: name, fn: top.name, answer: answer, choices: choices };
+  }
+  function traceCost(steps, nLines) {
+    const perLine = [];
+    for (let i = 0; i < nLines; i++) { perLine.push(0); }
+    let depth = 0, biggest = 0;
+    steps.forEach(function (st) {
+      if (st.line >= 1 && st.line <= nLines) { perLine[st.line - 1] += 1; }
+      depth = Math.max(depth, st.frames.length);
+      st.objects.forEach(function (o) { biggest = Math.max(biggest, o.items.length); });
+    });
+    return { perLine: perLine, depth: depth, biggest: biggest, steps: steps.length, top: Math.max.apply(null, perLine.concat([1])) };
+  }
+  function tracePlayer(s, st) {
+    const steps = st.data.steps;
+    if (typeof st.step !== 'number') { st.step = -1; }
+    if (!st.guess) { st.guess = { on: false, right: 0, total: 0, pending: null }; }
+    const box = el('div', 'st-player');
+    const ctr = el('div', 'st-ctr');
+    const play = el('button', 'st-btn p', traceTimer ? '⏸ 멈춤' : '▶ 재생');
+    play.type = 'button';
+    const one = el('button', 'st-btn', '한 단계');
+    one.type = 'button';
+    const back = el('button', 'st-btn', '처음');
+    back.type = 'button';
+    const spd = el('button', 'st-btn', { 1400: '느리게', 850: '보통', 400: '빠르게' }[traceSpeed]);
+    spd.type = 'button';
+    spd.title = '속도 바꾸기';
+    const prog = el('div', 'st-prog');
+    const bar = el('i', '');
+    prog.append(bar);
+    const count = el('span', 'st-count', '');
+    ctr.append(play, one, back, spd, prog, count);
+    const guessRow = el('label', 'st-guessopt');
+    const gchk = el('input', '');
+    gchk.type = 'checkbox';
+    gchk.checked = st.guess.on;
+    guessRow.append(gchk, document.createTextNode(' 맞혀 보며 보기 (다음 줄·값을 먼저 고르기)'));
+    const gscore = el('span', 'st-gscore', st.guess.total ? '  ' + st.guess.right + ' / ' + st.guess.total + ' 맞힘' : '');
+    guessRow.append(gscore);
+    const followRow = el('label', 'st-guessopt');
+    const fchk = el('input', '');
+    fchk.type = 'checkbox';
+    fchk.checked = st.follow !== false;
+    followRow.append(fchk, document.createTextNode(' 편집기에서 따라가기 (F10 한 단계 · Esc 멈춤)'));
+    if (st.local) { followRow.append(el('span', 'st-gscore', '  · 내 PC 의 Python 으로 실행')); }
+    if (st.followFail) { followRow.append(el('span', 'st-next', '  편집기에서 이 코드를 찾지 못해 여기서만 보여줘요')); }
+    fchk.addEventListener('change', function () {
+      st.follow = fchk.checked;
+      st.followFail = false;
+      if (!fchk.checked) { vscode.postMessage({ type: 'followStop' }); } else { vscode.postMessage({ type: 'traceShow', reqId: st.reqId, step: st.step, follow: true }); }
+    });
+    const code = el('div', 'code st-tcode');
+    const cursor = el('div', 'st-cursor');
+    code.append(cursor);
+    let hs = null;
+    const lineEls = [];
+    const codeLines = String(s.r.code || '').replace(/\\r\\n/g, '\\n').replace(/\\n$/, '').split('\\n');
+    const cost = traceCost(steps, codeLines.length);
+    codeLines.forEach(function (text, k) {
+      const h = highlight(text, s.r.language, hs);
+      hs = h.state;
+      const ln = el('div', 'ln');
+      ln.append(el('span', 'n', String((s.r.start_line || 1) + k)), h.node);
+      // 줄별 실행 횟수 — 많이 돈 줄일수록 진하게
+      const c = cost.perLine[k];
+      if (c) {
+        const heat = el('span', 'st-heat', '×' + c);
+        heat.style.setProperty('--h', String(Math.round(c / cost.top * 100)));
+        heat.title = '이 줄이 실행된 횟수';
+        ln.append(heat);
+      }
+      ln.addEventListener('click', function () { if (st.guess.pending && st.guess.pending.kind === 'line') { answerGuess(k + 1); } });
+      code.append(ln);
+      lineEls.push(ln);
+    });
+    const say = el('div', 'st-say', '▶ 를 누르면 한 줄씩 실행돼요.');
+    const quiz = el('div', 'st-gq');
+    quiz.hidden = true;
+    const mem = el('div', 'st-mem');
+    const memGrid = el('div', 'st-memgrid');
+    const stackCol = el('div', '');
+    const objCol = el('div', '');
+    const stack = el('div', 'st-stack');
+    const objs = el('div', 'st-objs');
+    stackCol.append(el('div', 'st-ml', '호출 스택 (위가 지금)'), stack);
+    objCol.append(el('div', 'st-ml', '값 (객체)'), objs);
+    const arrows = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    arrows.setAttribute('class', 'st-arrows');
+    memGrid.append(stackCol, objCol, arrows);
+    const alias = el('div', 'st-alias');
+    mem.append(memGrid, alias);
+    const costBox = el('div', 'st-cost');
+    [[cost.steps + '단계', '실행'], ['×' + cost.top, '가장 많이 돈 줄'], [cost.depth + '칸', '최대 스택 깊이'], [cost.biggest + '칸', '가장 큰 리스트']].forEach(function (p) {
+      const d = el('div', '');
+      d.append(el('b', '', p[0]), el('span', '', p[1]));
+      costBox.append(d);
+    });
+    box.append(ctr, guessRow, followRow, code, quiz, say, mem, el('div', 'st-ml', '실제 비용 (이 실행 기록으로 잼)'), costBox);
+    if (st.data.truncated) { box.append(el('div', 'st-next', '기록이 길어서 앞부분만 보여줘요.')); }
+    let prevFrames = [];
+
+    function drawArrows() {
+      arrows.replaceChildren();
+      const g = memGrid.getBoundingClientRect();
+      if (!g.width) { return; }
+      const targets = {};
+      objs.querySelectorAll('.st-obj').forEach(function (o) { targets[o.dataset.label] = o; });
+      const seen = {};
+      stack.querySelectorAll('.st-vr').forEach(function (row) {
+        const t = targets[row.dataset.ref];
+        if (!t) { return; }
+        const a = row.getBoundingClientRect(), b = t.getBoundingClientRect();
+        const x1 = a.right - g.left, y1 = a.top + a.height / 2 - g.top, x2 = b.left - g.left, y2 = b.top + 9 - g.top;
+        const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        p.setAttribute('d', 'M' + x1 + ' ' + y1 + ' C' + (x1 + 18) + ' ' + y1 + ' ' + (x2 - 18) + ' ' + y2 + ' ' + x2 + ' ' + y2);
+        arrows.append(p);
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dot.setAttribute('cx', String(x2)); dot.setAttribute('cy', String(y2)); dot.setAttribute('r', '2.5');
+        arrows.append(dot);
+        seen[row.dataset.ref] = (seen[row.dataset.ref] || []).concat([row.dataset.name]);
+      });
+      const shared = Object.keys(seen).filter(function (k) { return seen[k].length > 1; });
+      alias.textContent = shared.length ? shared.map(function (k) { return seen[k].join(' · ') + ' 은(는) 같은 ' + k + ' 를 가리켜요 (복사 아님)'; }).join(' / ') : '';
+    }
+
+    function show(animate) {
+      const cur = steps[st.step];
+      if (st.follow !== false && !st.followFail) { vscode.postMessage({ type: 'traceShow', reqId: st.reqId, step: st.step, follow: true }); }
+      count.textContent = (st.step + 1) + ' / ' + steps.length;
+      bar.style.width = ((st.step + 1) / steps.length * 100) + '%';
+      lineEls.forEach(function (l) { l.classList.toggle('st-pick', !!(st.guess.pending && st.guess.pending.kind === 'line')); });
+      if (!cur) { cursor.style.opacity = '0'; say.textContent = '▶ 를 누르면 한 줄씩 실행돼요.'; stack.replaceChildren(); objs.replaceChildren(); arrows.replaceChildren(); alias.textContent = ''; prevFrames = []; return; }
+      const ln = lineEls[cur.line - 1];
+      cursor.style.opacity = '1';
+      if (ln) { cursor.style.top = ln.offsetTop + 'px'; cursor.style.height = ln.offsetHeight + 'px'; }
+      say.textContent = cur.say || ('' + cur.line + '번째 줄');
+      if (animate) { say.classList.remove('flash'); void say.offsetWidth; say.classList.add('flash'); }
+      const frames = cur.frames.slice().reverse();
+      const pushed = cur.frames.length > prevFrames.length;
+      const labels = cur.objects.map(function (o) { return o.label; });
+      stack.replaceChildren();
+      frames.forEach(function (f, i) {
+        const d = el('div', 'st-frame' + (i === 0 ? ' top' : '') + (animate && pushed && i === 0 ? ' push' : ''));
+        d.append(el('div', 'st-fh', f.name + (i === 0 ? ' ← 지금' : '')));
+        const before = prevFrames[cur.frames.length - 1 - i];
+        Object.keys(f.vars).forEach(function (k) {
+          const v = f.vars[k];
+          const changed = animate && (!before || before.vars[k] !== v);
+          const row = el('div', 'st-vr');
+          row.dataset.name = k;
+          // 이름이 객체 이름과 같거나 "→ 이름" 이면 화살표로 잇는다 (변수는 상자가 아니라 객체를 가리키는 이름)
+          const ref = labels.indexOf(k) >= 0 ? k : (String(v).indexOf('→ ') === 0 && labels.indexOf(String(v).slice(2)) >= 0 ? String(v).slice(2) : '');
+          if (ref) { row.dataset.ref = ref; }
+          row.append(el('span', '', k), el('span', 'st-val' + (changed ? ' flash' : '') + (ref ? ' ref' : ''), ref ? '●' : v));
+          d.append(row);
+        });
+        stack.append(d);
+      });
+      if (!frames.length) { stack.append(el('div', 'st-next', '(함수가 끝났어요)')); }
+      objs.replaceChildren();
+      cur.objects.forEach(function (o) {
+        const d = el('div', 'st-obj');
+        d.dataset.label = o.label;
+        d.append(el('div', 'st-ot', o.label));
+        const cells = el('div', 'st-cells');
+        o.items.forEach(function (v, i) {
+          const mark = o.marks[i] || '';
+          const c = el('span', (i === o.look ? 'look ' : '') + (mark === 'new' && i === o.look && animate ? 'new' : mark === 'new' ? 'kept' : mark));
+          c.textContent = v;
+          cells.append(c);
+        });
+        if (!o.items.length) { cells.append(el('span', 'empty', '비어 있음')); }
+        d.append(cells);
+        objs.append(d);
+      });
+      if (cur.ret) { objs.append(el('div', 'st-ret' + (animate ? ' flash' : ''), '돌려준 값 ' + cur.ret)); }
+      prevFrames = cur.frames;
+      requestAnimationFrame(drawArrows);
+    }
+
+    // 맞혀 보며 보기 — 다음 단계를 보여주기 전에 묻는다. 값이 바뀌면 값 문제, 아니면 다음 줄 문제
+    function askNext() {
+      const k = st.step;
+      const nx = steps[k + 1];
+      if (!nx) { return false; }
+      const ch = nextChange(steps, k);
+      if (ch && Math.random() < 0.6) {
+        st.guess.pending = { kind: 'value', answer: ch.answer };
+        quiz.replaceChildren(el('div', 'st-q', '다음에 ' + ch.fn + ' 의 ' + ch.name + ' 는?'));
+        const row = el('div', 'st-hints');
+        ch.choices.forEach(function (c) {
+          const b = el('button', 'sh-chip', c);
+          b.type = 'button';
+          b.addEventListener('click', function () { answerGuess(c); });
+          row.append(b);
+        });
+        quiz.append(row);
+      } else {
+        st.guess.pending = { kind: 'line', answer: nx.line };
+        quiz.replaceChildren(el('div', 'st-q', '다음에 실행될 줄을 코드에서 눌러 보세요'));
+      }
+      quiz.hidden = false;
+      show(false);
+      return true;
+    }
+    function answerGuess(v) {
+      const p = st.guess.pending;
+      if (!p) { return; }
+      const ok = String(v) === String(p.answer);
+      st.guess.total += 1;
+      if (ok) { st.guess.right += 1; }
+      st.guess.pending = null;
+      gscore.textContent = '  ' + st.guess.right + ' / ' + st.guess.total + ' 맞힘';
+      quiz.replaceChildren(el('div', 'st-gres ' + (ok ? 'ok' : 'bad'), ok ? '✓ 맞았어요' : '✗ 정답은 ' + (p.kind === 'line' ? ((s.r.start_line || 1) + p.answer - 1) + '번째 줄' : p.answer)));
+      st.step += 1;
+      show(true);
+    }
+    function next() {
+      if (st.step >= steps.length - 1) { stopTrace(); play.textContent = '▶ 재생'; return false; }
+      if (st.guess.on) { return askNext() && false; }
+      quiz.hidden = true;
+      st.step += 1;
+      show(true);
+      return true;
+    }
+    gchk.addEventListener('change', function () {
+      st.guess.on = gchk.checked;
+      st.guess.pending = null;
+      quiz.hidden = true;
+      play.disabled = gchk.checked;
+      play.title = gchk.checked ? '맞혀 보며 볼 때는 한 단계씩' : '';
+      if (gchk.checked) { stopTrace(); play.textContent = '▶ 재생'; }
+    });
+    play.disabled = st.guess.on;
+    play.addEventListener('click', function () {
+      if (traceTimer) { stopTrace(); play.textContent = '▶ 재생'; return; }
+      if (st.step >= steps.length - 1) { st.step = -1; }
+      play.textContent = '⏸ 멈춤';
+      const tick = function () { if (next()) { traceTimer = setTimeout(tick, traceSpeed); } else { play.textContent = '▶ 재생'; } };
+      tick();
+    });
+    one.addEventListener('click', function () {
+      stopTrace();
+      play.textContent = '▶ 재생';
+      if (st.guess.pending) { return; }
+      next();
+    });
+    back.addEventListener('click', function () { stopTrace(); play.textContent = '▶ 재생'; st.step = -1; st.guess.pending = null; quiz.hidden = true; show(false); });
+    spd.addEventListener('click', function () {
+      traceSpeed = traceSpeed === 850 ? 400 : traceSpeed === 400 ? 1400 : 850;
+      spd.textContent = { 1400: '느리게', 850: '보통', 400: '빠르게' }[traceSpeed];
+    });
+    traceCtl = {
+      next: function () { one.click(); },
+      stop: function () { stopTrace(); play.textContent = '▶ 재생'; st.follow = false; fchk.checked = false; },
+    };
+    requestAnimationFrame(function () {
+      show(false);
+      if (st.autoPlay) { st.autoPlay = false; play.click(); }
+    });
+    return box;
+  }
+  let traceCtl = null;
+
+  // ── 검색 결과 "이 결과는 왜 나왔나" (ⓘ) — 지금 받은 결과만으로 설명 (질문 → 숫자 → 가까운 순 → 범위 → AI 에 넘김)
+  function whyBox(r) {
+    const box = el('div', 'why');
+    const rows = current ? current.results : [];
+    const inAnswer = typeof r.rank === 'string';
+    const q = inAnswer ? (currentAnswer ? currentAnswer.q : '') : (current ? current.query : '');
+    const step = function (n, title, body) {
+      const d = el('div', 'why-step');
+      d.style.animationDelay = (n * 90) + 'ms';
+      d.append(el('span', 'why-n', String(n)));
+      const b = el('div', 'why-b');
+      b.append(el('div', 'why-t', title));
+      if (typeof body === 'string') { b.append(el('div', 'why-d', body)); } else if (body) { b.append(body); }
+      d.append(b);
+      box.append(d);
+    };
+    step(1, '질문을 숫자로', '"' + String(q).slice(0, 60) + '" 를 E5 모델이 숫자 묶음(벡터)으로 바꿔요. 저장한 코드도 저장할 때 같은 방식으로 바꿔 뒀어요.');
+    const scope = current && current.filter && (current.filter.project || current.filter.language)
+      ? [current.filter.project, current.filter.language].filter(Boolean).join(' · ') + ' 로 먼저 걸렀어요' : '범위 없이 저장한 코드 전체에서 찾았어요';
+    step(2, '범위', inAnswer ? 'AI 질문은 범위를 무시하고 전체에서 찾아요' : scope);
+    const bars = el('div', 'why-bars');
+    const list = inAnswer && currentAnswer ? currentAnswer.r.sources : rows;
+    list.slice(0, 8).forEach(function (x) {
+      const sc = typeof x.score === 'number' ? x.score : null;
+      const row = el('div', 'why-row' + (x.id === r.id && x.file_path === r.file_path ? ' me' : ''));
+      const fill = el('i', '');
+      fill.style.width = sc === null ? '0' : Math.max(2, Math.round(sc * 100)) + '%';
+      const track = el('span', 'why-track');
+      track.append(fill);
+      row.append(el('span', 'why-nm', (inAnswer ? x.citation_id + ' ' : '') + nameOf(x)), track, el('span', 'why-sc', sc === null ? '-' : sc.toFixed(3)));
+      bars.append(row);
+    });
+    const pos = list.findIndex(function (x) { return x.id === r.id && x.file_path === r.file_path; });
+    step(3, '가까운 순서 — 이 코드는 ' + (pos >= 0 ? (pos + 1) + '번째' : '목록 밖') + (typeof r.score === 'number' ? ' (유사도 ' + r.score.toFixed(3) + ')' : ''), bars);
+    step(4, inAnswer ? 'AI 에 넘김' : 'AI 질문이었다면',
+      inAnswer ? '이 코드는 [' + r.rank + '] 번호를 달고 질문과 함께 AI 에 넘어갔어요. 답변의 [' + r.rank + '] 가 이 코드예요.'
+        : '이렇게 찾은 위쪽 코드들이 [S1] [S2] … 번호를 달고 질문과 함께 AI 에 넘어가요. AI 는 그 코드만 보고 답해요.');
+    return box;
   }
 
   // ── 시연 모드 (학술제용) — 순서 안내, 실제로 그 기능을 쓰면 자동 체크
@@ -2997,6 +4779,16 @@ function getHtml(webview: vscode.Webview): string {
     // 1줄: 순위 · 이름 · 유사도
     const head = el('div', 'head');
     head.append(el('span', 'rank', String(r.rank)), el('span', 'name', nameOf(r)), simEl(r));
+    const whyBtn = el('button', 'why-btn', 'ⓘ');
+    whyBtn.type = 'button';
+    whyBtn.title = '이 결과는 왜 나왔나';
+    whyBtn.addEventListener('click', function () {
+      const open = c.querySelector(':scope > .why');
+      if (open) { open.remove(); whyBtn.classList.remove('on'); return; }
+      whyBtn.classList.add('on');
+      head.after(whyBox(r));
+    });
+    head.append(whyBtn);
 
     // 2줄: 파일 : 줄 범위 (누르면 원본 열기). 이 PC 에 원본이 없으면 흐린 글자 + "원본 없음"
     const loc = el('div', 'loc');
@@ -3071,6 +4863,9 @@ function getHtml(webview: vscode.Webview): string {
     const copyBtn = action('copy', '복사', function () { copyCode(r, copyBtn); });
     acts.append(openBtn, action('insert', '삽입', function () { insertCode(r); }), copyBtn,
       action('diff', '비교', function () { compareResult(r); }));
+    const studyBtn = action('book', '공부', function () { openStudy(r); });
+    studyBtn.title = '이 코드에 쓰인 개념 보고 복습에 넣기';
+    acts.append(studyBtn);
     if (typeof r.id === 'number') {
       const delBtn = action('trash', '삭제', function () { vscode.postMessage({ type: 'deleteSnippet', result: r }); });
       delBtn.classList.add('del');
@@ -3655,8 +5450,8 @@ function getHtml(webview: vscode.Webview): string {
     const cls = msg.cached ? 'saved' : insufficient ? 'warn' : 'ok';
     const parts = [answerHead(label, cls, msg.q, { copy: true, keys: true, regen: !!msg.cached })];
     if (filterOn(sfilter)) {
-      const pill = el('span', 'achip saved', '범위 무시 · 전체 DB');
-      pill.title = 'AI 질문에는 프로젝트·언어 범위를 적용하지 않아요';
+      const pill = el('span', 'achip saved', '전체 DB');
+      pill.title = 'AI 질문에는 검색 범위(프로젝트·언어)를 적용하지 않고 전체 DB 에서 찾아요';
       parts[0].querySelector('.achip').after(pill);
     }
     parts.push.apply(parts, prevLines(base, true));
