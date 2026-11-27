@@ -204,7 +204,7 @@ export interface StudyRequest {
   function_name: string | null;
   [extra: string]: unknown;      // target(다른 언어), answer(내 말로), call(실행), calls·tests(채점)
 }
-const AI_MODES: StudyMode[] = ['quiz', 'translate', 'explain', 'why', 'review', 'task', 'bug', 'plain', 'lines', 'narrate'];
+const AI_MODES: StudyMode[] = ['quiz', 'translate', 'explain', 'why', 'review', 'task', 'bug', 'plain', 'lines', 'narrate', 'distractors'];
 
 export async function fetchStudy(mode: StudyMode, req: StudyRequest, key: { provider: LlmProvider; value: string } | undefined): Promise<unknown> {
   const config = vscode.workspace.getConfiguration('codeMemory');
@@ -348,6 +348,7 @@ function mockTrace(req: StudyRequest): unknown {
 }
 export function mockStudy(mode: StudyMode, req: StudyRequest): unknown {
   if (mode === 'plain' || mode === 'lines' || mode === 'narrate') { return mockEasy(mode, req); }
+  if (mode === 'distractors') { return { choices: ['None', '[]', '오류: TypeError'] }; }
   const name = req.function_name || 'f';
   const lang = (req.language || '').toLowerCase();
   const py = lang === 'python';

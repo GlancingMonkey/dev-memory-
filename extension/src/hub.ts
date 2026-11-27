@@ -6,6 +6,8 @@ import { StudyMode, TraceResult } from './study';
 import { AiConceptCache, fetchAiConcepts, fetchStudy, readStudy, STUDY_KEY, StudyAiError, StudyCache } from './studyHost';
 import { insertCode, openSource, resolveUri, SearchResult } from './sidebar';
 import { LlmProvider } from './logic';
+import { studyDirect } from './llm';
+import { parseAiConcepts, parseStudyResult, STUDY_CONCEPTS } from './study';
 
 // ─────────────────────────────────────────────
 // Code Memory 탭 — 공부 · 실행 과정 · AI 대화 · 개념 지도를 코드 옆 편집기 탭 하나에서
@@ -19,16 +21,18 @@ export type HubTab = 'study' | 'trace' | 'chat' | 'map';
 export type HubItem = Partial<SearchResult> & { _uri?: string; _follow?: { call?: string } };
 
 const WINDOW_KEY = 'codeMemory.hubWindow';
-const AI_MODES: StudyMode[] = ['translate', 'explain', 'why', 'review', 'task', 'bug', 'plain', 'lines', 'narrate'];
+const AI_MODES: StudyMode[] = ['translate', 'explain', 'why', 'review', 'task', 'bug', 'plain', 'lines', 'narrate', 'distractors'];
 
 interface Deps {
   global: vscode.Memento;
   extensionUri: vscode.Uri;
   chat: ChatController;
   keyForRequest: () => Promise<{ key: { provider: LlmProvider; value: string } | undefined }>;
+  ownKey: () => Promise<{ provider: LlmProvider; value: string } | undefined>;   // 🔑 AI 키 — 있으면 공부 AI 도 그 회사로 직접
   follower: () => EditorFollower;
   studyChanged: () => void;            // 사이드바 오늘 복습 · 개념 지도 다시 그리기
   log: (line: string) => void;         // 출력 > Code Memory
+  demoDone: (id: string) => void;      // 시연 모드 순서 자동 체크
 }
 
 export class CodeMemoryHub {
@@ -111,11 +115,12 @@ export class CodeMemoryHub {
     return (await vscode.commands.getCommands(true)).includes(id);
   }
 
-  private env(): Record<string, unknown> {
+  private async env(): Promise<Record<string, unknown>> {
     const config = vscode.workspace.getConfiguration('codeMemory');
     return {
       mock: config.get<boolean>('mock', true),
       localRun: config.get<boolean>('localRun', true),
+      aiDirect: !!(await this.d.ownKey()),
       win: this.win,
     };
   }
@@ -133,7 +138,7 @@ export class CodeMemoryHub {
         const q = this.queue;
         this.queue = [];
         void this.panel?.webview.postMessage({
-          type: 'init', env: { ...this.env(), canPopout: await this.hasCommand('workbench.action.moveEditorToNewWindow') },
+          type: 'init', env: { ...(await this.env()), canPopout: await this.hasCommand('workbench.action.moveEditorToNewWindow') },
           study: readStudy(this.d.global.get(STUDY_KEY)),
           snap: this.snap,
         });
@@ -157,6 +162,14 @@ export class CodeMemoryHub {
         const base = { ...req, code: String(req.code ?? '').slice(0, 8000), language: String(req.language ?? ''), function_name: (req.function_name as string | null) ?? null };
         const mock = vscode.workspace.getConfiguration('codeMemory').get<boolean>('mock', true);
         try {
+          // 🔑 AI 키가 있으면 그 회사 API 로 바로 (Backend 의 /study 와 같은 모양으로 받아 같은 검사)
+          const own = await this.d.ownKey();
+          if (own && (mode === 'concepts' || AI_MODES.includes(mode as StudyMode))) {
+            const known = STUDY_CONCEPTS.map((c) => `${c.id}: ${c.name}`);
+            const raw = await studyDirect(mode, mode === 'concepts' ? { ...base, known } : base, own);
+            reply(mode === 'concepts' ? parseAiConcepts(raw, STUDY_CONCEPTS.map((c) => c.id)) : parseStudyResult(mode as StudyMode, raw));
+            break;
+          }
           const { key } = await this.d.keyForRequest();
           if (mode === 'concepts') {
             if (!this.aiConcepts) { this.aiConcepts = new AiConceptCache(this.d.global); }
@@ -216,6 +229,17 @@ export class CodeMemoryHub {
         try { reply((await this.runSource((m.item ?? {}) as HubItem)).code); } catch (err) { fail(err); }
         break;
       }
+      case 'adopt': {
+        // 화면에서 실행한 JavaScript 기록 — 확인하고 편집기 따라가기용으로 맡아 둔다
+        try {
+          const data = parseStudyResult('trace', m.data) as TraceResult;
+          const src = await this.runSource((m.item ?? {}) as HubItem);
+          this.traces.set(id, { data, target: src.target });
+          if (this.traces.size > 5) { this.traces.delete(this.traces.keys().next().value as number); }
+          reply({ ...data, id });
+        } catch (err) { fail(err); }
+        break;
+      }
       case 'step': {
         // 실행 과정 단계가 바뀔 때마다 편집기에도 지금 줄 · 값 · 횟수
         const t = this.traces.get(Number(m.trace));
@@ -261,7 +285,7 @@ export class CodeMemoryHub {
           await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
           this.win = true;
           await this.d.global.update(WINDOW_KEY, true);
-          this.post({ type: 'env', env: this.env() });
+          this.post({ type: 'env', env: await this.env() });
         } else {
           vscode.window.showInformationMessage('창으로 떼기는 VS Code 1.85 이상에서 돼요.');
         }
@@ -278,6 +302,9 @@ export class CodeMemoryHub {
         await this.open(item, tab);
         break;
       }
+      case 'demo':
+        if (typeof m.id === 'string') { this.d.demoDone(m.id); }
+        break;
       case 'saveSnippet':
         await vscode.commands.executeCommand('codeMemory.saveSnippet');
         break;

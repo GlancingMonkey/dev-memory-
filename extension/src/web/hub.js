@@ -1,6 +1,8 @@
 // Code Memory 탭 화면 (웹뷰). esbuild 가 dist/hub.js 로 묶는다. 확장 본체는 src/hub.ts
 //   개념 찾기 · 복습 간격 · 개념 지도 계산은 src/study.ts 를 그대로 쓴다
 import { STUDY_CONCEPTS, detectConcepts, scheduleNext, dueCards, buildConceptGraph, learningPath } from '../study';
+import { traceJs } from './jstrace';
+import { EASY, TERMS, argFor, errPlain, explainLine, fnFrames, keyNarrate, kindOf, mutate, paramNames, showOut, shuffle } from '../easy';
 
 const nil = (v) => v === null || v === undefined;
 
@@ -19,202 +21,7 @@ function h(tag, attrs, ...kids) {
   kids.flat(9).forEach((k) => { if (nil(k) || k === false) {return;} e.append(k.nodeType ? k : document.createTextNode(String(k))); });
   return e;
 }
-function indentOf(s) { return s.match(/^\s*/)[0].length; }
-function paramNames(params) {
-  return String(params || '').split(',').map((p) => p.trim()).filter(Boolean)
-    .map((p) => p.replace(/^\.\.\./, '').replace(/[:=].*$/, '').trim())
-    .filter((p) => p && p !== 'self' && p !== 'cls' && !p.startsWith('*'));
-}
-function argFor(name, lang, variant) {
-  const n = name.toLowerCase();
-  const js = lang !== 'python';
-  const pick = (a, b, c) => (variant === 1 ? b : variant === 2 ? c : a);
-  if (/^(values|nums|numbers|lst|list|arr|items|xs|data|seq|scores)$/.test(n) || /s$/.test(n) && /num|val|item|score/.test(n)) {return pick('[3, -4, 0, 7]', '[10, 15, 22]', '[]');}
-  if (/^(rows|records)$/.test(n)) {return js ? pick('[{ price: 3 }, { price: 4 }, {}]', '[{ price: 10 }]', '[]') : pick('[{"price": 3}, {"price": 4}]', '[{"price": 10}]', '[]');}
-  if (/^(key|field|prop)$/.test(n)) {return pick("'price'", "'price'", "'price'");}
-  if (/^(text|s|string|sentence|word|name|line|msg)$/.test(n)) {return pick("'the cat and the hat'", "'hello world'", "''");}
-  if (/^(words|names|strings)$/.test(n)) {return pick("['b', 'a', 'b']", "['x']", '[]');}
-  if (/^(size|k|step|width)$/.test(n)) {return pick('2', '3', '1');}
-  if (/^(n|num|number|count|i|x|y|a|b|m|limit)$/.test(n)) {return pick(n === 'b' || n === 'y' ? '3' : '5', n === 'b' || n === 'y' ? '4' : '1', '0');}
-  if (/^(d|dict|mapping|obj|table)$/.test(n)) {return js ? pick('{ a: 1 }', '{}', '{}') : pick('{"a": 1}', '{}', '{}');}
-  if (/^(fn|func|f|callback|cb)$/.test(n)) {return js ? '(x) => x * 2' : 'lambda x: x * 2';}
-  if (/^(ms|delay|timeout)$/.test(n)) {return '10';}
-  return pick('[3, 1, 2]', '[1]', '[]');
-}
-const EASY = {
-  loop: '빨래를 한 장씩 집어서 개는 것처럼, 목록에서 하나씩 꺼내 같은 일을 해요.',
-  condition: '"비가 오면 우산을 챙긴다"처럼, 상황이 맞을 때만 그 일을 해요.',
-  modulo: '사탕 7개를 2명이 나누면 1개가 남죠. 그 남은 1이 7 % 2 예요. 남는 게 0이면 짝수!',
-  recursion: '러시아 인형처럼, 같은 일을 더 작은 크기로 다시 맡기다가 가장 작은 인형에서 멈춰요.',
-  list_comp: '체로 거르듯, 목록에서 조건에 맞는 것만 골라 새 목록을 한 번에 만들어요.',
-  dict_comp: '이름표와 값을 짝지은 사전을 한 줄로 만들어요.',
-  generator: '한꺼번에 다 만들지 않고, 달라고 할 때마다 하나씩 내주는 자판기예요.',
-  lambda: '이름 붙일 필요 없는 아주 짧은 일회용 레시피예요.',
-  fstring: '빈칸 채우기 문장이에요. f"안녕 {name}" 의 {} 자리에 값이 들어가요.',
-  try_except: '"혹시 실패하면 이렇게 하자" 하고 미리 대비책을 세워 두는 거예요.',
-  try_catch: '"혹시 실패하면 이렇게 하자" 하고 미리 대비책을 세워 두는 거예요.',
-  with_stmt: '문을 열고 들어갔다가, 나올 때 자동으로 문을 닫아 주는 거예요.',
-  decorator: '선물 포장처럼, 원래 함수는 그대로 두고 겉에 기능을 덧씌워요.',
-  slicing: '빵을 잘라 원하는 부분만 가져오듯, 목록이나 글자의 일부를 잘라 와요.',
-  unpacking: '상자 여러 개를 한 번에 풀어 각자 이름표에 넣어요.',
-  default_args: '재료를 안 주면 기본으로 쓰는 값이 미리 정해져 있어요.',
-  args_kwargs: '재료가 몇 개 올지 몰라서 "몇 개든 다 받을게" 하고 열어 둔 거예요.',
-  sort_key: '"키 순서로 줄 세우기"처럼 무엇을 기준으로 정렬할지 정해요.',
-  enumerate_zip: '번호표를 붙여 꺼내거나(enumerate), 두 줄을 짝지어 꺼내요(zip).',
-  type_hints: '상자에 "숫자만 넣어 주세요" 같은 안내 스티커를 붙여 둔 거예요.',
-  none_check: '"아무것도 없음(None)"인지 먼저 확인해서 실수를 막아요.',
-  arrow: '함수를 짧게 쓰는 방법이에요. (a, b) => a - b 는 "a와 b를 받아 a-b를 돌려줘".',
-  array_methods: '목록에 한꺼번에 일을 시키는 도구예요. map 은 바꾸기, filter 는 거르기, reduce 는 하나로 합치기.',
-  destructuring: '상자에서 필요한 것만 꺼내 이름표에 바로 넣어요.',
-  spread: '상자 안에 든 것들을 쏟아서 펼쳐 놓아요.',
-  template_literal: '빈칸 채우기 문장이에요. 백틱(`) 안의 ${} 자리에 값이 들어가요.',
-  optional_chaining: '"있으면 꺼내고, 없으면 그냥 넘어가"예요. 없는 걸 꺼내다 멈추는 걸 막아요.',
-  strict_eq: '값과 종류가 둘 다 같은지 엄격하게 비교해요. 숫자 1 과 글자 "1" 은 달라요.',
-  class_py: '붕어빵 틀이에요. 틀 하나로 비슷한 물건을 여러 개 만들어요.',
-  class_js: '붕어빵 틀이에요. 틀 하나로 비슷한 물건을 여러 개 만들어요.',
-  async_py: '라면 물이 끓는 동안 다른 일을 하듯, 기다리는 동안 다른 일을 해요.',
-  async_js: '라면 물이 끓는 동안 다른 일을 하듯, 기다리는 동안 다른 일을 해요.',
-  ts_types: '상자에 "숫자만 넣어 주세요" 같은 안내 스티커를 붙여 둔 거예요.',
-  generics: '"무엇이든 담을 수 있지만, 한번 정하면 그 종류만" 담는 상자예요.',
-};
-const TERMS = {
-  '함수': '이름이 붙은 작은 레시피예요. 재료(값)를 넣으면 정해진 순서대로 일하고 결과를 돌려줘요.',
-  '변수': '값을 담아 두는, 이름표 붙은 상자예요.',
-  '목록': '값 여러 개를 순서대로 담은 것이에요. 파이썬에선 [1, 2, 3] 처럼 써요 (리스트, 배열).',
-  '조건': '"만약 ~라면"이에요. 맞으면(참) 안쪽 줄을 실행하고, 아니면(거짓) 건너뛰어요.',
-  '반복': '같은 일을 여러 번 하는 거예요. 목록에서 하나씩 꺼내며 돌아요.',
-  '돌려줘요': '함수가 일을 끝내고 결과를 자기를 부른 곳에 넘겨주는 것(return)이에요.',
-  '호출': '함수에게 "이 재료로 일해 줘" 하고 부르는 것이에요. 예: fact(5)',
-  '실행 중인 함수': '함수가 불릴 때마다 그 함수만의 작업 공간(상자)이 하나 생겨요. 일을 끝내면 사라져요. 여러 개면 함수가 다른 함수를 불러서 결과를 기다리는 중이에요.',
-  '입력값': '함수에 넣는 값이에요 (인자). fact(5) 에서는 5 가 입력값이에요. 요리 레시피의 재료와 같아요.',
-  '리스트': '값 여러 개를 순서대로 담은 것이에요. [1, 2, 3] 처럼 써요 (목록, 배열).',
-  '오류': '컴퓨터가 더 이상 진행할 수 없을 때 멈추면서 알려주는 메시지예요. 고장 난 곳을 알려주는 힌트예요.',
-  '개념': '코드에 쓰인 문법이나 생각하는 방법이에요. 예: 반복, 조건.',
-  '복습': '잊어버릴 때쯤 다시 보면 오래 기억돼요. 이해한 정도에 따라 다음에 볼 날을 정해 줘요.',
-};
 function term(w, label) { return h('span', { class: 'term', tabindex: '0', 'data-term': w }, label || w); }
-function errPlain(e) {
-  const s = String(e || '');
-  if (/not iterable/.test(s)) {return '하나씩 꺼낼 수 있는 목록이 와야 하는데, 꺼낼 수 없는 값(예: None, 숫자)이 들어왔어요.';}
-  if (/ZeroDivision|division by zero/.test(s)) {return '0으로 나누려고 했어요. 0으로는 나눌 수 없어요.';}
-  if (/RecursionError|maximum recursion|call stack/.test(s)) {return '자기 자신을 끝없이 다시 불러서 멈췄어요. 멈추는 조건이 필요해요.';}
-  if (/TooLong|2만 줄|2초|멈췄어요/.test(s)) {return '너무 오래 돌아서 멈췄어요. 끝나지 않는 반복일 수 있어요.';}
-  if (/NoneType/.test(s)) {return '값이 비어 있는(None) 상태에서 무언가를 하려고 했어요.';}
-  if (/IndexError|out of range/.test(s)) {return '목록에 없는 자리(번호)를 꺼내려고 했어요.';}
-  if (/KeyError/.test(s)) {return '사전에 없는 이름표로 값을 찾으려고 했어요.';}
-  if (/NameError|is not defined/.test(s)) {return '아직 만들지 않은 이름을 썼어요. 철자를 확인해 보세요.';}
-  if (/not all arguments converted|unsupported operand|can't multiply|can only concatenate|must be str|not supported between|can't convert/.test(s)) {return '서로 섞을 수 없는 종류(예: 글자와 숫자)를 같이 계산하려고 했어요.';}
-  if (/missing \d+ required|positional argument|takes \d+ positional/.test(s)) {return '함수에 넣어야 할 입력값이 모자라거나 너무 많아요.';}
-  if (/SyntaxError|Unexpected|invalid syntax/.test(s)) {return '코드 문법이 틀렸어요. 괄호나 콜론(:), 따옴표를 확인해 보세요.';}
-  if (/AttributeError|is not a function|Cannot read prop/.test(s)) {return '그 값에는 없는 기능을 쓰려고 했어요.';}
-  if (/TypeError/.test(s)) {return '값의 종류가 맞지 않아요. 예를 들어 목록이 와야 할 자리에 숫자가 왔어요.';}
-  return '';
-}
-function kindOf(v) {
-  v = String(v || '').trim();
-  if (/^\[/.test(v)) {return '목록';}
-  if (/^['"`]/.test(v)) {return '글자';}
-  if (/^-?\d/.test(v)) {return '숫자';}
-  if (/^\{/.test(v)) {return '사전';}
-  if (/lambda|=>/.test(v)) {return '함수';}
-  if (/^(None|null|undefined)$/.test(v)) {return '없음';}
-  if (/^(True|False|true|false)$/.test(v)) {return '참/거짓';}
-  return '값';
-}
-function varsIn(expr, vars) {
-  const ks = Object.keys(vars || {}).filter((k) => new RegExp('(^|[^\\w.])' + k.replace(/\$/g, '\\$') + '(?![\\w(])').test(expr));
-  return ks.slice(0, 3).map((k) => k + ' 은(는) ' + vars[k]).join(', ');
-}
-function explainLine(code, ctx, lang) {
-  code = String(code || '').trim().replace(/;$/, '');
-  const v = ctx ? ctx.vars : null;
-  let m;
-  if (!code) {return '빈 줄이에요.';}
-  if (/^(#|\/\/)/.test(code)) {return '설명을 적어 둔 메모(주석)예요. 컴퓨터는 이 줄을 무시해요.';}
-  if ((m = code.match(/^(?:async\s+)?def\s+(\w+)\s*\((.*)\)/)) || (m = code.match(/^(?:export\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*\((.*)\)/)) || (m = code.match(/^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\((.*)\)\s*=>/))) {
-    const ps = paramNames(m[2]);
-    return m[1] + ' 라는 함수(레시피)를 만들어요. ' + (ps.length ? '입력값으로 ' + ps.join(', ') + ' 을(를) 받아요.' : '입력값 없이 일해요.');
-  }
-  if ((m = code.match(/^(?:if|elif)\s+(.+?):$/)) || (m = code.match(/^(?:\}\s*else\s+)?if\s*\((.+)\)\s*\{?$/))) {
-    if (!ctx) {return '조건 「' + m[1] + '」 이 맞으면 안쪽 줄을 실행하고, 아니면 건너뛰어요.';}
-    const vi = varsIn(m[1], v);
-    return '조건 「' + m[1] + '」 이 맞는지 확인해요' + (vi ? ' (지금 ' + vi + ')' : '') + '. ' + (ctx.next ? (ctx.inside ? '맞아요! 그래서 안쪽 줄로 들어가요.' : '아니에요. 그래서 안쪽 줄은 건너뛰어요.') : '');
-  }
-  if (/^(\}\s*)?else\b/.test(code)) {return '앞의 조건이 맞지 않을 때 오는 곳(else)이에요.';}
-  if ((m = code.match(/^for\s+(.+?)\s+in\s+(.+?):$/))) {
-    if (!ctx) {return m[2] + ' 에서 값을 하나씩 꺼내 ' + m[1] + ' 에 넣으면서 안쪽 줄을 되풀이해요.';}
-    if (ctx.inside) { const nv = ctx.nextVars && ctx.nextVars[m[1]]; return m[2] + ' 에서 다음 값을 꺼내 ' + m[1] + ' 에 넣어요' + (!nil(nv) ? '. 이번 값은 ' + nv + ' 예요.' : '.'); }
-    return m[2] + ' 에서 더 꺼낼 값이 없어서 되풀이를 끝내요.';
-  }
-  if ((m = code.match(/^for\s*\((.+)\)\s*\{?$/))) {
-    if (!ctx) {return '조건이 맞는 동안 안쪽 줄을 되풀이해요 (' + m[1] + ').';}
-    return ctx.inside ? '되풀이 조건이 아직 맞아서 한 번 더 돌아요.' : '되풀이 조건이 끝나서 멈춰요.';
-  }
-  if ((m = code.match(/^while\s*\(?(.+?)\)?\s*[:{]?$/))) {
-    if (!ctx) {return '조건 「' + m[1] + '」 이 맞는 동안 안쪽 줄을 계속 되풀이해요.';}
-    return '조건 「' + m[1] + '」 확인' + (varsIn(m[1], v) ? ' (지금 ' + varsIn(m[1], v) + ')' : '') + '. ' + (ctx.inside ? '아직 맞아서 한 번 더 돌아요.' : '이제 아니라서 되풀이를 멈춰요.');
-  }
-  if ((m = code.match(/^return\s+\[(.+?)\s+for\s+(\w+)\s+in\s+(.+?)(?:\s+if\s+(.+))?\]$/))) {
-    return m[3] + ' 에서 ' + m[2] + ' 를 하나씩 꺼내' + (m[4] ? ' 조건 「' + m[4] + '」 에 맞는 것만' : '') + ' 새 목록에 모아서 돌려줄 거예요. (체로 거르는 것처럼)';
-  }
-  if ((m = code.match(/^return\b\s*(.*)$/))) {return m[1] ? '「' + m[1] + '」 를 계산해서 결과로 돌려줄 거예요.' + (varsIn(m[1], v) ? ' (지금 ' + varsIn(m[1], v) + ')' : '') : '아무 값 없이 일을 끝내요.';}
-  if ((m = code.match(/^([\w.[\]'"]+)\s*([+\-*/])=\s*(.+)$/))) {
-    const verb = { '+': '더해요', '-': '빼요', '*': '곱해요', '/': '나눠요' }[m[2]];
-    return m[1] + ' 에 ' + m[3] + ' 을(를) ' + verb + '.' + (varsIn(m[3], v) ? ' (지금 ' + varsIn(m[3], v) + ')' : '');
-  }
-  if ((m = code.match(/\.(append|push)\((.+)\)$/))) {return '목록 끝에 ' + m[2] + ' 을(를) 하나 붙여요.';}
-  if ((m = code.match(/^(?:const|let|var)?\s*([\w.[\]'"]+)\s*=\s*([^=].*)$/))) {
-    if (m[2] === '[]') {return m[1] + ' 라는 빈 목록(상자)을 만들어요.';}
-    if (m[2] === '{}') {return m[1] + ' 라는 빈 사전(이름표 묶음)을 만들어요.';}
-    if (/^-?\d+$/.test(m[2])) {return m[1] + ' 라는 상자를 만들고 ' + m[2] + ' 을(를) 넣어요.';}
-    return m[1] + ' 에 「' + m[2] + '」 의 값을 넣어요.';
-  }
-  if (/^(print|console\.log)\(/.test(code)) {return '화면에 글자를 보여줘요(출력).';}
-  if (/^(import|from)\s/.test(code)) {return '다른 곳에 있는 도구를 가져와요.';}
-  if (/^\}/.test(code)) {return '안쪽 묶음이 끝나는 곳이에요.';}
-  return '「' + code + '」 을(를) 실행해요.';
-}
-function fnFrames(fr) { return (fr || []).filter((f) => f.name !== '부른 곳'); }
-function narrate(T, i, lines) {
-  const steps = T.data.steps, s = steps[i], prev = steps[i - 1], next = steps[i + 1];
-  const fr = fnFrames(s.frames), pfr = prev ? fnFrames(prev.frames) : [], nfr = next ? fnFrames(next.frames) : [];
-  const top = fr[fr.length - 1] || { name: '', vars: {} };
-  const code = (lines[s.line - 1] || '').trim();
-  if (/^오류로 멈췄어요/.test(String(s.say || ''))) {return '여기서 문제가 생겨 멈췄어요. ' + (errPlain(s.ret) || s.ret || '');}
-  if (s.ret) {
-    const val = String(s.ret).split(' = ').slice(1).join(' = ');
-    return top.name + ' 함수가 일을 끝내고 결과 ' + val + ' 을(를) 돌려줘요.' + (fr.length > 1 ? ' 이 값은 자기를 불렀던 함수로 돌아가서 그 계산에 쓰여요.' : ' 이게 최종 결과예요!');
-  }
-  const out = [];
-  if (i === 0 || fr.length > pfr.length) {
-    const args = Object.keys(top.vars || {}).map((k) => k + ' = ' + top.vars[k]).join(', ');
-    const same = fr.filter((f) => f.name === top.name).length;
-    out.push((i === 0 ? '시작! ' : '') + top.name + ' 함수가 ' + (args ? '입력값 ' + args + ' 을(를) 받아서 ' : '') + '일을 시작해요.' + (same > 1 ? ' 자기 자신을 다시 부른 거예요(재귀). 같은 함수가 지금 ' + same + '개 실행 중이에요.' : ''));
-  }
-  const sameDepth = next && nfr.length === fr.length;
-  const inside = !!(sameDepth && next.line > s.line && indentOf(lines[next.line - 1] || '') > indentOf(lines[s.line - 1] || ''));
-  const nextVars = sameDepth && nfr.length ? nfr[nfr.length - 1].vars : null;
-  out.push(explainLine(code, { vars: top.vars || {}, next, nextVars, inside }, null));
-  if (nextVars) {
-    const ch = Object.keys(nextVars).filter((k) => (top.vars || {})[k] !== nextVars[k])
-      .map((k) => (top.vars || {})[k] === undefined ? k + ' 이(가) 새로 생겼어요 (' + nextVars[k] + ')' : k + ' 이(가) ' + top.vars[k] + ' 에서 ' + nextVars[k] + ' (으)로 바뀌어요');
-    if (ch.length) {out.push('그 결과 ' + ch.slice(0, 3).join(', ') + '.');}
-  } else if (next && nfr.length > fr.length) {out.push('여기서 함수를 새로 불러요. 실행 중인 함수가 하나 늘어요.');}
-  return out.join(' ');
-}
-function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
-function showOut(r) { return r.error ? '오류: ' + r.error.split(':')[0] : r.output; }
-function mutate(out) {
-  const res = [];
-  const m = String(out).match(/^\[(.*)\]$/);
-  if (m) {
-    const parts = m[1] ? m[1].split(', ') : [];
-    if (parts.length > 1) { res.push('[' + parts.slice().reverse().join(', ') + ']'); res.push('[' + parts.slice(1).join(', ') + ']'); }
-    if (parts.length === 1) {res.push('[]');}
-    if (!parts.length) {res.push('None');}
-  } else if (/^-?\d+(\.\d+)?$/.test(out)) { const n = Number(out); res.push(String(n + 1), String(n * 2), String(Math.max(0, n - 1))); }
-  return res.filter((x) => x !== out);
-}
 (function termTips() {
   let tip = null;
   const show = (el) => {
@@ -343,6 +150,8 @@ function ensureArgs(fn) {
   if (!T.raw) {T.call = callFromArgs(fn);}
 }
 function callFromArgs(fn) { return fn.name + '(' + paramNames(fn.params).map((p) => S.trace.args[p] || '').join(', ') + ')'; }
+// AI 를 쓸 수 있나 — 🔑 내 키가 있거나 실제 서버. mock 의 예시 답은 진짜 실행 해설보다 못해서 자동으로 부르지 않는다
+function aiReady() { return !!S.env.aiDirect || !S.env.mock; }
 function codeBlockReq(fn) { return { code: fn.code, language: fn.lang, function_name: fn.item.function_name || (fn.callable ? fn.name : null) }; }
 
 // ── 실행: Python 은 확장 본체(내 PC · 서버), JavaScript 는 이 화면의 Worker (2초 제한)
@@ -595,7 +404,7 @@ function viewLines(fn, sv) {
   else if (st && st.data) {box.append(h('div', { class: 'muted', style: 'margin-top:8px;font-size:12px' }, '✦ AI 가 풀어 쓴 설명이에요.'));}
   else {
     if (st && st.err) {box.append(h('div', { class: 'err' }, st.err));}
-    if (!S.env.mock) {box.append(h('button', { type: 'button', class: 'btn', style: 'margin-top:10px', onclick: () => ai(sv, 'lines', 'lines') }, '✦ AI 로 더 쉽게 풀어 읽기'));}
+    if (aiReady()) {box.append(h('button', { type: 'button', class: 'btn', style: 'margin-top:10px', onclick: () => ai(sv, 'lines', 'lines') }, '✦ AI 로 더 쉽게 풀어 읽기'));}
   }
   if (fn.callable) {box.append(h('div', { style: 'margin-top:12px' }, h('button', { type: 'button', class: 'btn p', onclick: () => followFn(fn) }, '▶ 실제로 한 줄씩 실행해 보기')));}
   return box;
@@ -680,7 +489,7 @@ function viewQuiz(fn, sv) {
   const q = sv.quiz;
   if (!q) {
     sv.quiz = { busy: true };
-    buildQuiz(fn).then((qs) => { sv.quiz = { qs, picks: {}, hints: {} }; }, (e) => { sv.quiz = { err: errText(e) }; }).then(() => render());
+    buildQuiz(fn).then((qs) => { sv.quiz = { qs, picks: {}, hints: {} }; betterChoices(fn, sv.quiz); }, (e) => { sv.quiz = { err: errText(e) }; }).then(() => render());
     box.append(h('div', { class: 'note' }, h('span', { class: 'spin' }), '코드를 실제로 돌려서 퀴즈를 만드는 중…'));
     return box;
   }
@@ -711,6 +520,22 @@ function viewQuiz(fn, sv) {
   });
   box.append(h('button', { type: 'button', class: 'btn', onclick: () => { sv.quiz = null; render(); } }, '다른 입력으로 다시 만들기'));
   return box;
+}
+// 결과 맞히기 보기를 AI 가 만든 "헷갈리는 오답"으로 바꾼다 (정답은 그대로 진짜 실행 결과, 아직 안 푼 문제만)
+function betterChoices(fn, q) {
+  if (!aiReady()) {return;}
+  q.qs.forEach((qq, qi) => {
+    if (!qq.call || qq.kind === '개념') {return;}
+    const right = qq.choices[qq.answer];
+    call('ai', { mode: 'distractors', req: Object.assign(codeBlockReq(fn), { call: qq.call, answer: right }) }).then((d) => {
+      if (!nil(q.picks[qi]) || S.fn !== fn) {return;}
+      const wrong = d.choices.filter((c) => c !== right).slice(0, 3);
+      if (wrong.length < 2) {return;}
+      const choices = shuffle([right].concat(wrong));
+      qq.choices = choices; qq.answer = choices.indexOf(right); qq.ai = true;
+      if (S.tab === 'study' && S.sub === 'quiz') {render();}
+    }, () => { /* 그대로 둔다 */ });
+  });
 }
 function buildQuiz(fn) {
   const v = [0, 1, 2].map((k) => suggestCall(fn, k));
@@ -889,11 +714,15 @@ function startTrace() {
   post('followStop');
   render();
   const tid = seq + 1;
-  call('trace', { item: fn.item, call: T.call }).then((d) => {
-    T.id = tid; T.data = d; T.code = d.code || fn.code; T.busy = false;
+  // JavaScript 는 이 화면에서 진짜로 실행해 기록하고(jstrace.js), 편집기 따라가기를 위해 확장 본체에 기록을 넘긴다
+  const run = isJs(fn.lang)
+    ? call('source', { item: fn.item }).then((code) => traceJs(code, T.call).then((d) => call('adopt', { item: fn.item, data: d }).then((ok) => Object.assign(ok, { code }))))
+    : call('trace', { item: fn.item, call: T.call });
+  run.then((d) => {
+    T.id = isJs(fn.lang) ? d.id : tid; T.data = d; T.code = d.code || fn.code; T.busy = false;
+    post('demo', { id: 'trace' });
     render();
     showStep();
-    if (!S.env.mock) {fetchNarration(fn);}
   }, (e) => { T.busy = false; T.err = errText(e); render(); });
 }
 function traceLines() { return String(S.trace.code || '').replace(/\r\n?/g, '\n').split('\n'); }
@@ -910,21 +739,6 @@ function stopPlay() { if (S.trace.timer) { clearInterval(S.trace.timer); S.trace
 function stepNext() { const T = S.trace; if (!T.data || T.i >= T.data.steps.length - 1) {return false;} T.i++; render(); showStep(); return true; }
 function stepPrev() { const T = S.trace; if (T.data && T.i > 0) { T.i--; render(); showStep(); } }
 function stopTrace() { stopPlay(); S.trace.data = null; post('followStop'); render(); }
-function fetchNarration(fn) {
-  const T = S.trace;
-  const d = T.data;
-  if (!d) {return;}
-  const lines = traceLines();
-  const steps = d.steps.slice(0, 80).map((s, i) => {
-    const fr = fnFrames(s.frames);
-    const top = fr.length ? fr[fr.length - 1].vars : {};
-    return (i + 1) + '. ' + s.line + '번째 줄 `' + (lines[s.line - 1] || '').trim() + '` | 값: ' + Object.keys(top).map((k) => k + '=' + top[k]).join(', ') + (s.ret ? ' | 돌려줌: ' + s.ret : '') + ' | 실행 중인 함수 ' + fr.length + '개';
-  });
-  T.ai = { busy: true };
-  call('ai', { mode: 'narrate', req: { code: T.code.slice(0, 8000), language: fn.lang, function_name: fn.item.function_name || fn.name, call: T.call, steps } })
-    .then((r) => { if (T.data !== d) {return;} T.ai = r; T.aiOn = true; }, (e) => { if (T.data === d) {T.ai = { err: errText(e) };} })
-    .then(() => { if (S.tab === 'trace') {render();} });
-}
 // 실행 중인 코드 — 창으로 떼어서 편집기가 안 보여도 여기서 지금 줄이 보이게
 function codeBox(lines, steps, i) {
   const st = steps[i];
@@ -941,15 +755,30 @@ function codeBox(lines, steps, i) {
   const top = fr.length ? fr[fr.length - 1].vars : {};
   const val = st.ret || Object.keys(top).slice(0, 3).map((k) => k + ' = ' + top[k]).join(' · ');
   const box = h('div', { class: 'codebox', 'aria-label': '실행 중인 코드' });
+  // Python Tutor 처럼: 초록 ➜ 방금 실행한 줄 · 빨간 ➜ 다음에 실행할 줄 (돌려주는 단계는 그 줄이 초록)
+  const pv = i > 0 ? steps[i - 1] : null;
+  const nextLine = st.ret ? 0 : st.line;
+  const doneLine = st.ret ? st.line : (pv && pv.line !== st.line ? pv.line : 0);
   for (let n = from; n <= to; n++) {
     const cur = n === st.line;
-    const row = h('div', { class: 'cl' + (cur ? ' cur' : '') }, h('span', { class: 'g' }, n), h('span', { class: 'tx' }, lines[n - 1] || ' '));
+    const ar = n === nextLine ? 'an' : n === doneLine ? 'ad' : '';
+    const row = h('div', { class: 'cl' + (cur ? ' cur' : '') }, h('span', { class: 'ar ' + ar, 'aria-hidden': 'true' }, ar ? '➜' : ''), h('span', { class: 'g' }, n), h('span', { class: 'tx' }, lines[n - 1] || ' '));
     if (cur && val) {row.append(h('span', { class: 'iv' }, (st.ret ? '↩ ' : '') + val));}
     else if (cnt[n]) {row.append(h('span', { class: 'hx' }, '×' + cnt[n]));}
     box.append(row);
   }
+  const wrap = h('div', { class: 'cbwrap' }, box, h('div', { class: 'cb-leg' }, h('b', { class: 'ad' }, '➜'), ' 방금 실행한 줄 · ', h('b', { class: 'an' }, '➜'), ' 다음에 실행할 줄'));
   requestAnimationFrame(() => { const c = box.querySelector('.cl.cur'); if (c && box.isConnected) { const r = c.offsetTop - box.clientHeight / 2; box.scrollTop = Math.max(0, r); } });
-  return box;
+  return wrap;
+}
+// ✦ 이 단계 물어보기 — 지금 줄 · 값을 같이 넣은 질문
+function stepQuestion(T, lines) {
+  const st = T.data.steps[T.i];
+  const fr = fnFrames(st.frames);
+  const top = fr.length ? fr[fr.length - 1].vars : {};
+  const vals = Object.keys(top).map((k) => k + ' = ' + top[k]).join(', ');
+  return T.call + ' 을(를) 한 줄씩 실행하는 중 ' + (T.i + 1) + '단계 (' + st.line + '번째 줄 `' + (lines[st.line - 1] || '').trim() + '`)' +
+    (st.ret ? ', 돌려준 값 ' + String(st.ret).split(' = ').slice(1).join(' = ') : '') + (vals ? ', 지금 값: ' + vals : '') + '. 여기서 무슨 일이 일어나는 건지 쉽게 설명해줘.';
 }
 function tracePane() {
   const pane = h('div', { class: 'pane' });
@@ -973,19 +802,12 @@ function tracePane() {
   const last = steps.length - 1;
   const st = steps[T.i];
   const lines = traceLines();
-  const aiText = T.aiOn && T.ai && T.ai.steps && T.ai.steps[T.i];
-  const card = h('div', { class: 'narr' });
-  card.append(h('div', { class: 'narr-h' }, h('b', null, '지금 무슨 일이?'), h('span', { class: 'muted' }, (T.i + 1) + ' / ' + steps.length + '단계' + (T.data.truncated ? ' (400단계에서 멈춤)' : ''))));
-  card.append(h('div', { class: 'narr-code' }, h('span', { class: 'g' }, st.line + '번째 줄'), h('code', null, (lines[st.line - 1] || '').trim() || ' ')));
-  card.append(h('div', { class: 'narr-t' }, aiText || narrate(T, T.i, lines)));
-  const sw = h('div', { class: 'narr-sw' });
-  const a = T.ai;
-  if (a && a.busy) {sw.append(h('span', { class: 'muted' }, h('span', { class: 'spin' }), 'AI 가 더 쉬운 해설을 쓰는 중이에요. 그동안 기본 해설로 보여드려요.'));}
-  else if (a && a.steps) {sw.append(h('span', { class: 'muted' }, '해설:'),
-    h('button', { type: 'button', class: 'seg' + (!T.aiOn ? ' on' : ''), onclick: () => { T.aiOn = false; render(); } }, '기본'),
-    h('button', { type: 'button', class: 'seg' + (T.aiOn ? ' on' : ''), onclick: () => { T.aiOn = true; render(); } }, '✦ AI (더 쉽게)'));}
-  else if (a && a.err) {sw.append(h('span', { class: 'muted' }, 'AI 해설을 못 받았어요 · '), h('button', { type: 'button', class: 'lk', onclick: () => fetchNarration(fn) }, '다시'));}
-  card.append(sw);
+  const nr = keyNarrate(T.data.steps, T.i, lines);
+  const card = h('div', { class: 'narr' + (nr.key ? '' : ' quiet') });
+  card.append(h('div', { class: 'narr-h' }, h('b', null, '지금 무슨 일이?'), h('span', { class: 'muted' }, (T.i + 1) + ' / ' + steps.length + '단계' + (T.data.truncated ? ' (400단계에서 멈춤)' : '')),
+    h('span', { style: 'flex:1' }),
+    h('button', { type: 'button', class: 'lk', title: 'AI 대화 탭에서 이 단계를 물어봐요', onclick: () => { stopPlay(); askAbout(stepQuestion(T, lines)); } }, '✦ 이 단계 물어보기')));
+  card.append(h('div', { class: 'narr-t' }, nr.text));
   const right = h('div', { class: 'trace-right' });
   right.append(card);
   right.append(h('div', { class: 'row', style: 'margin-top:10px' },
@@ -1000,7 +822,6 @@ function tracePane() {
   right.append(h('div', { class: 'muted', style: 'font-size:12px' }, '키보드: → 또는 F10 다음 · ← 이전 · Space 재생/멈춤 · Esc 끝내기'));
   if (T.i === last) {
     const done = h('div', { class: 'done' }, h('b', null, '다 끝났어요! '), '최종 결과: ', h('code', null, String(!nil(T.data.value) ? T.data.value : (steps[last].ret || ''))));
-    if (a && a.summary) {done.append(h('div', { style: 'margin-top:6px' }, '✦ 한마디로: ' + a.summary));}
     done.append(h('div', { class: 'row', style: 'margin-top:8px' },
       h('button', { type: 'button', class: 'btn', onclick: () => { T.i = 0; render(); showStep(); } }, '처음부터 다시 보기'),
       h('button', { type: 'button', class: 'btn', onclick: () => { const x = document.querySelector('[data-k="arg0"]') || document.querySelector('[data-k="call"]'); if (x) { x.focus(); x.select(); } } }, '다른 값 넣어 보기'),
@@ -1079,6 +900,7 @@ function chatSend(text) {
   const c = S.chat.chat;
   if (!q || (c && c.turns.some((t) => t.pending))) {return;}
   const fn = S.fn;
+  post('demo', { id: 'chat' });
   post('chat', { m: { type: 'send', text: q, useFile: S.chat.useFile, useSel: S.chat.useSel, fn: S.chat.useFn && fn ? { label: fn.name + (fn.file ? ' (' + fn.file + ')' : ''), language: fn.lang, code: fn.code } : null } });
   S.chat.draft = '';
   render();
@@ -1239,6 +1061,7 @@ function openItem(item, tab, follow) {
   if (!same) { S.trace.raw = false; S.trace.argsFor = null; S.trace.variant = 0; }
   S.welcomeOpen = S.welcomeOpen === true && !S.welcomeSeen ? true : false;
   if (tab === 'study' && !same) { S.group = 'u'; S.sub = 'lines'; }
+  if (tab === 'study') {post('demo', { id: 'study' });}
   S.tab = tab;
   if (tab === 'trace') {
     if (follow && follow.call) { S.trace.raw = true; S.trace.call = follow.call; }

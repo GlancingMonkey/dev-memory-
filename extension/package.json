@@ -216,12 +216,6 @@
           "type": "webview",
           "id": "codeMemory.searchView",
           "name": "검색"
-        },
-        {
-          "type": "webview",
-          "id": "codeMemory.chatView",
-          "name": "AI 대화",
-          "when": "config.codeMemory.studyLocation == 'sidebar'"
         }
       ]
     },
@@ -315,17 +309,10 @@
           "default": "",
           "description": "AI 대화를 🔑 AI 키로 직접 부를 때 쓸 모델. 비우면 회사별 기본값 (OpenAI gpt-6-luna · Anthropic claude-haiku-5-5 · Gemini gemini-3.5-flash-lite)"
         },
-        "codeMemory.studyLocation": {
-          "type": "string",
-          "enum": ["tab", "sidebar"],
-          "enumDescriptions": ["코드 옆 Code Memory 탭 (창으로 뗄 수 있음). 사이드바는 검색과 오늘 복습만", "예전처럼 사이드바 안에서 (AI 대화 칸도 사이드바에)"],
-          "default": "tab",
-          "description": "공부 · 실행 과정 보기 · AI 대화를 어디에 열지"
-        },
         "codeMemory.localRun": {
           "type": "boolean",
           "default": true,
-          "description": "Python 코드의 실행 따라가기·깨뜨려 보기·바꿔 보기 채점을 이 PC 의 Python 으로 직접 실행 (처음에 확인창, 5초 제한). 끄면 서버(POST /study/trace · run)를 씀"
+          "description": "Python 코드의 실행 과정 보기 · 이상한 값 넣어 보기 · 직접 고쳐 보기 채점을 이 PC 의 Python 으로 직접 실행 (처음에 확인창, 5초 제한). 끄면 서버(POST /study/trace · run)를 씀. JavaScript 는 Code Memory 탭 안에서 실행"
         },
         "codeMemory.pythonPath": {
           "type": "string",
@@ -401,7 +388,7 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vscode-test",
-    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js out/test/evaluationKey.test.js out/test/projectLocations.test.js out/test/study.test.js",
+    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js out/test/evaluationKey.test.js out/test/projectLocations.test.js out/test/study.test.js out/test/easy.test.js",
     "vsix": "npx --yes @vscode/vsce@3 package --no-dependencies --skip-license"
   },
   "devDependencies": {

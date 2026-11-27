@@ -14,6 +14,8 @@ const TIMEOUT_MS = 5000;
 // 기록용 파이썬 스크립트 — stdin 으로 {mode, code, call, calls, tests} 를 받아 stdout 마지막 줄에 JSON
 const TRACER = String.raw`
 import sys, json, io, contextlib, reprlib, traceback
+# -I 는 PYTHONIOENCODING 을 무시한다 → Windows 에서도 UTF-8 로 주고받게 직접 맞춘다
+sys.stdin.reconfigure(encoding='utf-8'); sys.stdout.reconfigure(encoding='utf-8')
 data = json.loads(sys.stdin.read())
 code = data.get('code', '')
 mode = data.get('mode', 'trace')
@@ -127,11 +129,14 @@ function pythonCandidates(): string[] {
   return process.platform === 'win32' ? ['python', 'py', 'python3'] : ['python3', 'python'];
 }
 
+// Windows 는 명령줄 인자의 한글을 시스템 코드페이지로 바꿔 깨뜨린다 → 한글은 \uXXXX 로 넘긴다
+const TRACER_ARG = TRACER.replace(/[^\x00-\x7f]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+
 function runPython(cmd: string, payload: unknown): Promise<string> {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(cmd, ['-I', '-c', TRACER], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+      child = spawn(cmd, ['-I', '-c', TRACER_ARG], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
     } catch (err) {
       reject(err);
       return;
@@ -139,8 +144,10 @@ function runPython(cmd: string, payload: unknown): Promise<string> {
     let out = '';
     let errText = '';
     const timer = setTimeout(() => { child.kill(); reject(new LocalRunError('timeout', `${TIMEOUT_MS / 1000}초가 넘어서 멈췄어요. 무한 반복이 있는지 보세요.`)); }, TIMEOUT_MS);
-    child.stdout.on('data', (d: Buffer) => { out += d.toString('utf8'); if (out.length > 4_000_000) { child.kill(); } });
-    child.stderr.on('data', (d: Buffer) => { errText += d.toString('utf8'); });
+    // 글자가 조각 경계에서 잘려도 깨지지 않게 문자열로 받는다
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (d: string) => { out += d; if (out.length > 4_000_000) { child.kill(); } });
+    child.stderr.on('data', (d: string) => { errText += d; });
     child.on('error', (err) => { clearTimeout(timer); reject(err); });
     child.on('close', () => {
       clearTimeout(timer);

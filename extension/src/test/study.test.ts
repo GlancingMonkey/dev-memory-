@@ -224,6 +224,10 @@ suite('parseStudyResult — 쉬운 말 (Code Memory 탭)', () => {
     assert.deepStrictEqual(r.steps, ['하나', '', '셋']);
     assert.throws(() => P('narrate', { steps: ['', ''] }), /해설/);
   });
+  test('퀴즈 오답 — 빈 보기는 버리고 2개보다 적으면 오류', () => {
+    assert.deepStrictEqual(P('distractors', { choices: ['[0]', '', ' [-4] ', 3] }), { choices: ['[0]', '[-4]'] });
+    assert.throws(() => P('distractors', { choices: ['하나'] }), /보기/);
+  });
   test('실행 기록 — 최종 값과 출력도 남김', () => {
     const r = P('trace', { call: 'f(1)', steps: [{ line: 1, frames: [] }], value: '2', stdout: 'hi' }) as { value: string; stdout: string };
     assert.strictEqual(r.value, '2');

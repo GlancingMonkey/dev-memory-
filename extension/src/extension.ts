@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import { COMPARE_SCHEME, compareDocs, findDuplicate, SaveRecord, SearchViewProvider, studyInTab, useProjectLocations } from './sidebar';
+import { COMPARE_SCHEME, compareDocs, findDuplicate, SaveRecord, SearchViewProvider, useProjectLocations } from './sidebar';
 import { EvaluationRunner } from './evaluation';
-import { ChatController, ChatViewProvider } from './chat';
+import { ChatController } from './chat';
 import { CodeMemoryHub } from './hub';
 import { ProjectLocations } from './projectLocations';
 import {
@@ -337,7 +337,7 @@ class FunctionLens implements vscode.CodeLensProvider {
         new vscode.CodeLens(range, { title: '✦ AI에게 묻기', tooltip: `${fn.name} 함수에 대해 묻기 (검색창에 질문을 채움)`, command: 'codeMemory.runOnFunction', arguments: args('ask') }),
         new vscode.CodeLens(range, { title: '🔍 비슷한 코드', tooltip: `${fn.name} 과 비슷한 저장 코드 찾기`, command: 'codeMemory.runOnFunction', arguments: args('similar') }),
         new vscode.CodeLens(range, { title: '📘 공부', tooltip: `${fn.name} 함수에 쓰인 개념 보고 복습에 넣기`, command: 'codeMemory.runOnFunction', arguments: args('study') }),
-        ...(doc.languageId === 'python' ? [new vscode.CodeLens(range, { title: '▶ 실행 과정 보기', tooltip: `${fn.name} 이(가) 한 줄씩 실행되는 과정을 해설과 함께 보기 (내 PC 의 Python)`, command: 'codeMemory.runOnFunction', arguments: args('follow') })] : []),
+        ...(['python', 'javascript', 'javascriptreact'].includes(doc.languageId) ? [new vscode.CodeLens(range, { title: '▶ 실행 과정 보기', tooltip: `${fn.name} 이(가) 한 줄씩 실행되는 과정을 해설과 함께 보기`, command: 'codeMemory.runOnFunction', arguments: args('follow') })] : []),
       );
     }
     return lenses;
@@ -524,7 +524,6 @@ export async function activate(context: vscode.ExtensionContext) {
   // AI 대화 칸 (검색 아래) — 편집기 옆 큰 창과 같은 대화
   const chat = new ChatController(context.globalState, searchProvider);
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, new ChatViewProvider(chat), { webviewOptions: { retainContextWhenHidden: true } }),
     chat.watchEditors(),
   );
 
@@ -535,6 +534,8 @@ export async function activate(context: vscode.ExtensionContext) {
     extensionUri: context.extensionUri,
     chat,
     keyForRequest: () => searchProvider.keyForRequest(false),
+    ownKey: () => searchProvider.ownKey(),
+    demoDone: (id) => searchProvider.demoDone(id),
     follower: () => searchProvider.follower,
     studyChanged: () => searchProvider.refreshStudy(),
     log: (line) => output.appendLine(`[${new Date().toLocaleTimeString()}] ${line}`),
@@ -543,7 +544,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     { dispose: () => hub.dispose() },
     vscode.commands.registerCommand('codeMemory.openHub', () => hub.open(undefined, 'study')),
-    vscode.commands.registerCommand('codeMemory.openChat', () => (studyInTab() ? hub.open(undefined, 'chat') : chat.openPanel())),
+    vscode.commands.registerCommand('codeMemory.openChat', () => hub.open(undefined, 'chat')),
   );
 
   // ─────────────────────────────────────────────
@@ -800,47 +801,23 @@ export async function activate(context: vscode.ExtensionContext) {
     const picked = pickSymbol(symbols, sel.start.line);
     const name = picked.fn?.name ?? findFunctionNameByRegex((i) => doc.lineAt(i).text, doc.languageId, sel.start.line) ?? 'f';
     const folder0 = vscode.workspace.getWorkspaceFolder(doc.uri);
-    if (studyInTab()) {
-      // Code Memory 탭이 입력값 칸을 보여 준다 (매개변수 이름으로 예시 값을 채움)
-      await searchProvider.openStudy({
-        function_name: name,
-        file_path: vscode.workspace.asRelativePath(doc.uri, false).replace(/\\/g, '/'),
-        project_name: folder0 ? folder0.name : null,
-        language: doc.languageId,
-        start_line: sel.start.line + 1,
-        end_line: adjustEndLine(sel.start.line, sel.end.line, sel.end.character) + 1,
-        code,
-        _uri: doc.uri.toString(),
-        _follow: {},
-      } as Partial<import('./sidebar').SearchResult>);
-      return;
-    }
-    const lastCalls = context.globalState.get<Record<string, string>>('codeMemory.lastCalls', {});
-    const call = await vscode.window.showInputBox({
-      title: `${name} 을(를) 무엇으로 불러 볼까요?`,
-      prompt: '함수 호출 모양으로 적어 주세요. 예: even_numbers([3, -4, 0, 7])',
-      value: lastCalls[name] ?? `${name}()`,
-      valueSelection: [name.length + 1, (lastCalls[name] ?? `${name}()`).length - 1],
-    });
-    if (!call) { return; }
-    await context.globalState.update('codeMemory.lastCalls', { ...lastCalls, [name]: call });
-    const folder = vscode.workspace.getWorkspaceFolder(doc.uri);
+    // Code Memory 탭이 입력값 칸을 보여 준다 (매개변수 이름으로 예시 값을 채움)
     await searchProvider.openStudy({
       function_name: name,
       file_path: vscode.workspace.asRelativePath(doc.uri, false).replace(/\\/g, '/'),
-      project_name: folder ? folder.name : null,
+      project_name: folder0 ? folder0.name : null,
       language: doc.languageId,
       start_line: sel.start.line + 1,
       end_line: adjustEndLine(sel.start.line, sel.end.line, sel.end.character) + 1,
       code,
       _uri: doc.uri.toString(),
-      _follow: { call },
+      _follow: {},
     } as Partial<import('./sidebar').SearchResult>);
   });
   context.subscriptions.push(followFunction,
-    vscode.commands.registerCommand('codeMemory.followNext', () => (hub.tracing ? hub.followCmd('next') : searchProvider.followCmd('next'))),
-    vscode.commands.registerCommand('codeMemory.followPrev', () => { if (hub.tracing) { hub.followCmd('prev'); } }),
-    vscode.commands.registerCommand('codeMemory.followStop', () => { hub.followCmd('stop'); searchProvider.followCmd('stop'); }),
+    vscode.commands.registerCommand('codeMemory.followNext', () => hub.followCmd('next')),
+    vscode.commands.registerCommand('codeMemory.followPrev', () => hub.followCmd('prev')),
+    vscode.commands.registerCommand('codeMemory.followStop', () => hub.followCmd('stop')),
     { dispose: () => searchProvider.disposeFollower() });
   context.subscriptions.push(studySelection,
     vscode.commands.registerCommand('codeMemory.openConceptMap', () => searchProvider.openConceptMap()));
