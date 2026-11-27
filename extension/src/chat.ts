@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
-import { AskSource, AskTurn } from './logic';
-import { askBackend, insertCode, openSource, SearchResult, SearchViewProvider, withCodeContext } from './sidebar';
+import { AskSource, AskTurn, LlmProvider } from './logic';
+import { askBackend, insertCode, openSource, SearchResult, SearchViewProvider, searchSnippets, withCodeContext } from './sidebar';
+import { normalizeFilter } from './logic';
+import { LlmMessage, streamChat } from './llm';
 
 // ─────────────────────────────────────────────
 // AI 대화 — 검색창 질문과 따로, 계속 이어지는 대화
@@ -28,7 +30,7 @@ interface Chat {
 }
 
 export class ChatController {
-  private readonly webviews = new Set<vscode.Webview>();
+  private readonly ports = new Set<(m: unknown) => void>();
   private chats: Chat[];
   private currentId: string;
   private ctrl: AbortController | undefined;
@@ -76,9 +78,19 @@ export class ChatController {
   attach(webview: vscode.Webview): vscode.Disposable {
     webview.options = { enableScripts: true };
     webview.html = chatHtml(webview);
-    this.webviews.add(webview);
-    const sub = webview.onDidReceiveMessage((m: Record<string, unknown>) => { void this.onMessage(webview, m); });
-    return new vscode.Disposable(() => { sub.dispose(); this.webviews.delete(webview); });
+    const post = (m: unknown) => { void webview.postMessage(m); };
+    this.ports.add(post);
+    const sub = webview.onDidReceiveMessage((m: Record<string, unknown>) => { void this.onMessage(m); });
+    return new vscode.Disposable(() => { sub.dispose(); this.ports.delete(post); });
+  }
+
+  // 다른 화면(Code Memory 탭)이 같은 대화를 쓰게 — 그 화면이 메시지를 감싸서 주고받는다
+  attachPort(post: (m: unknown) => void): { receive(m: Record<string, unknown>): void; dispose(): void } {
+    this.ports.add(post);
+    return {
+      receive: (m) => { void this.onMessage(m); },
+      dispose: () => { this.ports.delete(post); },
+    };
   }
 
   openPanel(): void {
@@ -89,7 +101,7 @@ export class ChatController {
   }
 
   private post(m: unknown): void {
-    this.webviews.forEach((w) => { void w.postMessage(m); });
+    this.ports.forEach((post) => post(m));
   }
   private broadcast(): void {
     this.post({ type: 'state', chat: this.current, list: this.chats.map((c) => ({ id: c.id, title: c.title, time: c.time, n: c.turns.length })), ctx: this.ctxInfo(), panel: !!this.panel });
@@ -98,13 +110,13 @@ export class ChatController {
     this.post({ type: 'ctx', ctx: this.ctxInfo() });
   }
 
-  private async onMessage(webview: vscode.Webview, m: Record<string, unknown>): Promise<void> {
+  private async onMessage(m: Record<string, unknown>): Promise<void> {
     switch (m.type) {
       case 'ready':
         this.broadcast();
         break;
       case 'send':
-        await this.send(String(m.text ?? ''), !!m.useFile, !!m.useSel);
+        await this.send(String(m.text ?? ''), !!m.useFile, !!m.useSel, m.fn && typeof m.fn === 'object' ? m.fn as { label: string; language: string; code: string } : undefined);
         break;
       case 'cancel':
         this.ctrl?.abort();
@@ -151,10 +163,42 @@ export class ChatController {
         break;
       }
     }
-    void webview;
   }
 
-  private async send(text: string, useFile: boolean, useSel: boolean): Promise<void> {
+  private async sendDirect(q: string, items: { label: string; language: string; code: string }[], chat: Chat, turn: ChatTurn, idx: number,
+    own: { provider: LlmProvider; value: string }, signal: AbortSignal): Promise<void> {
+    // 질문과 비슷한 저장 코드 3개 (mock 이면 샘플) — 못 찾아도 대화는 그대로
+    let sources: AskSource[] = [];
+    try {
+      const found = await searchSnippets(q, normalizeFilter({}));
+      sources = found.results.filter((r) => r.score >= 0.3).slice(0, 3).map((r, i) => ({
+        citation_id: `S${i + 1}`, id: r.id, project_name: r.project_name, file_path: r.file_path, language: r.language,
+        function_name: r.function_name, start_line: r.start_line, end_line: r.end_line, code: r.code, score: r.score,
+      }));
+    } catch {
+      sources = [];
+    }
+    turn.sources = sources;
+    this.post({ type: 'sources', chatId: chat.id, turn: idx, sources });
+    const blocks: string[] = [];
+    items.forEach((i) => blocks.push(`[참고 코드: ${i.label}]\n\`\`\`${i.language}\n${i.code.slice(0, 6000)}\n\`\`\``));
+    if (sources.length) {
+      blocks.push('[저장한 코드]\n' + sources.map((s) => `[${s.citation_id}] ${s.function_name ?? '(이름 없음)'} — ${s.file_path}:${s.start_line}\n\`\`\`${s.language}\n${s.code.slice(0, 2000)}\n\`\`\``).join('\n\n'));
+    }
+    const history: LlmMessage[] = [];
+    chat.turns.slice(0, -1).filter((t) => t.a && !t.err).slice(-10).forEach((t) => {
+      history.push({ role: 'user', content: t.q }, { role: 'assistant', content: t.a });
+    });
+    const content = blocks.length ? `${blocks.join('\n\n')}\n\n질문: ${q}` : q;
+    turn.a = await streamChat({
+      provider: own.provider, key: own.value, system: CHAT_SYSTEM, signal,
+      messages: [...history, { role: 'user', content }],
+      onDelta: (t) => { turn.a += t; this.post({ type: 'delta', chatId: chat.id, turn: idx, text: t }); },
+    }) || turn.a;
+    if (!turn.a.trim()) { turn.a = '(빈 답이 왔어요. 다시 물어봐 주세요.)'; }
+  }
+
+  private async send(text: string, useFile: boolean, useSel: boolean, fn?: { label: string; language: string; code: string }): Promise<void> {
     const q = text.trim();
     const chat = this.current;
     if (!q || chat.turns.some((t) => t.pending)) { return; }
@@ -164,6 +208,10 @@ export class ChatController {
       items.push({ label: `${vscode.workspace.asRelativePath(e.document.uri, false)}:${e.selection.start.line + 1}-${e.selection.end.line + 1}`, language: e.document.languageId, code: e.document.getText(e.selection) });
     } else if (e && useFile) {
       items.push({ label: vscode.workspace.asRelativePath(e.document.uri, false), language: e.document.languageId, code: e.document.getText() });
+    }
+    // Code Memory 탭에서 보고 있는 함수
+    if (fn && typeof fn.code === 'string' && fn.code.trim() && !items.some((i) => i.code.includes(fn.code))) {
+      items.push({ label: String(fn.label || '함수').slice(0, 120), language: String(fn.language || ''), code: fn.code.slice(0, 8000) });
     }
     const history: AskTurn[] = chat.turns.filter((t) => t.a && !t.err).slice(-2).map((t) => ({ q: t.q, answer: t.a }));
     const turn: ChatTurn = { q, a: '', sources: [], ctx: items.map((i) => i.label), pending: true, time: new Date().toISOString() };
@@ -177,6 +225,12 @@ export class ChatController {
     this.ctrl = ctrl;
     const idx = chat.turns.length - 1;
     try {
+      // 🔑 AI 키에 내 키가 있으면 그 회사 API 를 직접 — 일반 질문도 되고, 저장한 코드는 /search 로 찾아 [S1] 로 붙인다
+      const own = await this.search.ownKey();
+      if (own) {
+        await this.sendDirect(q, items, chat, turn, idx, own, ctrl.signal);
+        return;
+      }
       const { key } = await this.search.keyForRequest(false);
       const r = await askBackend(withCodeContext(q, items), {
         history, signal: ctrl.signal, key,
@@ -194,6 +248,14 @@ export class ChatController {
     }
   }
 }
+
+export const CHAT_SYSTEM = [
+  '너는 VS Code 확장 "Code Memory" 의 AI 도우미야. 상대는 코드를 처음 배우는 사람일 수도 있어.',
+  '한국어 존댓말(~요)로 짧고 정확하게 답해. 전문 용어는 되도록 피하고, 꼭 쓰면 바로 쉬운 말로 풀어 줘.',
+  '코드는 ``` 블록으로. 마크다운 제목은 쓰지 마.',
+  '[참고 코드] 로 붙은 것은 사용자가 지금 보고 있는 코드야. [S1] 같은 번호가 붙은 [저장한 코드] 를 근거로 쓸 때는 문장 끝에 [S1] 처럼 표시하고, 관련 없으면 무시해.',
+  '코드와 상관없는 일반 질문에도 그냥 답해.',
+].join('\n');
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly viewId = 'codeMemory.chatView';

@@ -60,15 +60,23 @@
       },
       {
         "command": "codeMemory.openChat",
-        "title": "Code Memory: ✦ AI 대화 크게 열기"
+        "title": "Code Memory: ✦ AI 대화 열기"
+      },
+      {
+        "command": "codeMemory.openHub",
+        "title": "Code Memory: Code Memory 탭 열기 (공부 · 실행 과정 · AI 대화)"
       },
       {
         "command": "codeMemory.followFunction",
-        "title": "Code Memory: ▶ 이 함수 실행하며 따라가기 (Python)"
+        "title": "Code Memory: ▶ 이 함수의 실행 과정 보기 (Python)"
       },
       {
         "command": "codeMemory.followNext",
-        "title": "Code Memory: 따라가기 한 단계"
+        "title": "Code Memory: 실행 과정 다음 단계"
+      },
+      {
+        "command": "codeMemory.followPrev",
+        "title": "Code Memory: 실행 과정 이전 단계"
       },
       {
         "command": "codeMemory.followStop",
@@ -158,6 +166,10 @@
           "when": "codeMemory.following"
         },
         {
+          "command": "codeMemory.followPrev",
+          "when": "codeMemory.following"
+        },
+        {
           "command": "codeMemory.followStop",
           "when": "codeMemory.following"
         }
@@ -204,11 +216,6 @@
           "type": "webview",
           "id": "codeMemory.searchView",
           "name": "검색"
-        },
-        {
-          "type": "webview",
-          "id": "codeMemory.chatView",
-          "name": "AI 대화"
         }
       ]
     },
@@ -297,10 +304,15 @@
           "default": true,
           "description": "검색 결과에서 코드 내용이 똑같은 것은 가장 위 하나만 보이고 나머지는 접기"
         },
+        "codeMemory.chatModel": {
+          "type": "string",
+          "default": "",
+          "description": "AI 대화를 🔑 AI 키로 직접 부를 때 쓸 모델. 비우면 회사별 기본값 (OpenAI gpt-6-luna · Anthropic claude-haiku-5-5 · Gemini gemini-3.5-flash-lite)"
+        },
         "codeMemory.localRun": {
           "type": "boolean",
           "default": true,
-          "description": "Python 코드의 실행 따라가기·깨뜨려 보기·바꿔 보기 채점을 이 PC 의 Python 으로 직접 실행 (처음에 확인창, 5초 제한). 끄면 서버(POST /study/trace · run)를 씀"
+          "description": "Python 코드의 실행 과정 보기 · 이상한 값 넣어 보기 · 직접 고쳐 보기 채점을 이 PC 의 Python 으로 직접 실행 (처음에 확인창, 5초 제한). 끄면 서버(POST /study/trace · run)를 씀. JavaScript 는 Code Memory 탭 안에서 실행"
         },
         "codeMemory.pythonPath": {
           "type": "string",
@@ -376,7 +388,7 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vscode-test",
-    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js out/test/evaluationKey.test.js out/test/projectLocations.test.js out/test/study.test.js",
+    "test:unit": "npm run compile-tests && mocha --ui tdd out/test/logic.test.js out/test/evaluationKey.test.js out/test/projectLocations.test.js out/test/study.test.js out/test/easy.test.js",
     "vsix": "npx --yes @vscode/vsce@3 package --no-dependencies --skip-license"
   },
   "devDependencies": {
