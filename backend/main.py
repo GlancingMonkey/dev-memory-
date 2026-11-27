@@ -7,6 +7,7 @@ from backend.routers.ask import router as ask_router
 from backend.routers.filters import router as filters_router
 from backend.routers.search import router as search_router
 from backend.routers.snippets import router as snippets_router
+from backend.routers.study import router as study_router
 from rag.embedding import warmup_model
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ app.include_router(snippets_router)
 app.include_router(search_router)
 app.include_router(filters_router)
 app.include_router(ask_router)
+app.include_router(study_router)
 
 
 @app.get("/health")

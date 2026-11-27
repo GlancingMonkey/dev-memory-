@@ -1,11 +1,12 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer
 
 
 class SearchFilters(BaseModel):
     project: str | None = Field(default=None, max_length=200)
     language: str | None = Field(default=None, max_length=200)
+    concept: str | None = Field(default=None, max_length=100)
 
-    @field_validator("project", "language", mode="before")
+    @field_validator("project", "language", "concept", mode="before")
     @classmethod
     def normalize(cls, value, info):
         if isinstance(value, str):
@@ -14,6 +15,13 @@ class SearchFilters(BaseModel):
                 value = value.lower()
             return value or None
         return value
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        result = handler(self)
+        if self.concept is None:
+            result.pop("concept", None)
+        return result
 
 
 class SearchResult(BaseModel):
