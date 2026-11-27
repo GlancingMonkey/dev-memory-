@@ -1,0 +1,7 @@
+{
+  "name": "code-memory-study-runner",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {"acorn": "8.15.0"}
+}

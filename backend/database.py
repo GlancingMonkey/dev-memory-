@@ -23,26 +23,22 @@ def connect_db():
 
 
 def insert_snippet(snippet: SnippetCreateRequest) -> int:
+    columns = "project_name, file_path, language, function_name, start_line, end_line, code"
+    values = [snippet.project_name, snippet.file_path, snippet.language,
+              snippet.function_name, snippet.start_line, snippet.end_line, snippet.code]
+    if snippet.concepts is not None:
+        columns += ", concepts"
+        values.append(snippet.concepts)
+    placeholders = ", ".join(["%s"] * len(values))
     with connect_db() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                """
-                INSERT INTO snippets (
-                    project_name, file_path, language, function_name,
-                    start_line, end_line, code
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                f"""
+                INSERT INTO snippets ({columns})
+                VALUES ({placeholders})
                 RETURNING id
                 """,
-                (
-                    snippet.project_name,
-                    snippet.file_path,
-                    snippet.language,
-                    snippet.function_name,
-                    snippet.start_line,
-                    snippet.end_line,
-                    snippet.code,
-                ),
+                tuple(values),
             )
             row = cursor.fetchone()
             if row is None:
@@ -76,6 +72,7 @@ def search_snippets(
     *,
     project: str | None = None,
     language: str | None = None,
+    concept: str | None = None,
 ) -> list[dict]:
     if not 1 <= limit <= 20:
         raise ValueError("limit must be between 1 and 20")
@@ -89,7 +86,7 @@ def search_snippets(
     ):
         raise ValueError("query_vector must be finite and non-zero")
 
-    filters = SearchFilters(project=project, language=language)
+    filters = SearchFilters(project=project, language=language, concept=concept)
     conditions = ["embedding IS NOT NULL", "vector_norm(embedding) > 0"]
     params: list = [Vector(query_vector)]
     if filters.project is not None:
@@ -98,6 +95,9 @@ def search_snippets(
     if filters.language is not None:
         conditions.append("lower(btrim(language)) = %s")
         params.append(filters.language)
+    if filters.concept is not None:
+        conditions.append("%s = ANY(concepts)")
+        params.append(filters.concept)
     where_sql = " AND ".join(conditions)
     params.append(limit)
 

@@ -18,6 +18,7 @@ def search_snippets_endpoint(
     limit: Annotated[int, Query(ge=1, le=20)] = 10,
     project: str | None = None,
     language: str | None = None,
+    concept: str | None = None,
 ) -> SearchResponse:
     question = q.strip()
 
@@ -28,11 +29,11 @@ def search_snippets_endpoint(
         )
 
     try:
-        filters = SearchFilters(project=project, language=language)
+        filters = SearchFilters(project=project, language=language, concept=concept)
     except ValidationError:
         raise HTTPException(
             status_code=422,
-            detail="프로젝트·언어 조건은 앞뒤 공백을 제외하고 각각 200자 이하여야 합니다.",
+            detail="프로젝트·언어는 200자, 개념 ID는 100자 이하여야 합니다.",
         ) from None
 
     try:
@@ -50,11 +51,13 @@ def search_snippets_endpoint(
         ) from None
 
     try:
+        concept_filter = {"concept": filters.concept} if filters.concept is not None else {}
         results = search_snippets(
             query_vector,
             limit=limit,
             project=filters.project,
             language=filters.language,
+            **concept_filter,
         )
     except Exception:
         logger.exception("Failed to search snippets")

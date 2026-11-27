@@ -1,0 +1,13 @@
+{
+  "plain": {"one_line":"두 값을 더해요.","analogy":"사과를 합쳐요.","use":"합계를 구할 때 써요."},
+  "lines": {"lines":[{"line":1,"plain":"더하는 함수를 만들어요."},{"line":2,"plain":"합계를 돌려줘요."}]},
+  "narrate": {"summary":"합계를 구해요.","steps":["함수를 시작해요.","합계를 돌려줘요."]},
+  "explain": {"points":[{"verdict":"ok","text":"더한다는 설명이 맞아요.","lines":[2]}]},
+  "why": {"alternatives":[{"label":"합계 함수","code":"return sum([a,b])","speed":"같음","memory":"많음","readability":"보통","note":"임시 목록을 만들어요."}],"complexity":{"time":"O(1)","space":"O(1)","note":"두 값만 더해요."},"deeper":[{"title":"더하기","text":"숫자를 더해요.","doc":"https://docs.python.org/3/reference/expressions.html"}]},
+  "translate": {"language":"typescript","code":"function add(a: number, b: number) { return a + b; }","notes":[{"from":"def","to":"function","why":"함수를 선언해요."}]},
+  "review": {"items":[{"kind":"good","title":"간단해요","text":"두 값을 더해요.","lines":[2]}],"improved_code":"def add(a,b):\n    return a + b"},
+  "task": {"task":"세 값을 더하도록 바꿔 보세요.","starter":"def add(a,b,c):\n    pass","tests":[{"call":"add(1,2,3)","expected":"6"}]},
+  "bug": {"code":"def add(a,b):\n    return a - b","line":2,"explain":"더하기를 빼기로 바꿨어요.","fixed_line":"    return a + b"},
+  "distractors": {"choices":["0","-1","12"]},
+  "concepts": {"concepts":[{"id":"condition","name":"조건문","level":1,"summary":"조건에 따라 실행해요.","in_this_code":"학습용 응답 형식 검사 자료예요.","lines":[1],"prereq":[],"misconception":"","contrast":""}]}
+}

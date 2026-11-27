@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!package.json
+!package-lock.json
+!python_worker.py
+!js_worker.mjs
+!instrument.mjs

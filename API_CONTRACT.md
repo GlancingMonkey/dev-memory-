@@ -43,14 +43,19 @@ Content-Type: application/json
 | start_line | integer | 필수 | 선택한 코드의 시작 줄, 1부터 계산 |
 | end_line | integer | 필수 | 선택한 코드의 마지막 줄, 1부터 계산 |
 | code | string | 필수 | 선택한 코드 원문, 줄바꿈과 들여쓰기 포함 |
+| concepts | string[] 또는 null | 선택 | 개념 ID 목록. 최대 64개, 각 ID는 공백 제거 후 1~100자. 중복 제거 |
 
-Extension은 위 7개 필드를 전송한다. 원본 파일의 절대 경로는 Extension 내부에서 사용하며 요청에 포함하지 않는다.
+기존 7개 필드 요청을 유지하며 concepts는 선택적으로 추가한다. 원본 파일의 절대 경로는 Extension 내부에서 사용하며 요청에 포함하지 않는다.
+
+concepts 생략·null이면 기존 7개 필드 INSERT를 유지한다. [] 또는 ID 배열을 전송하면 DB의 concepts 컬럼에 저장한다.
+Backend가 기대하는 DB 계약은 snippets.concepts TEXT[]다. 실제 컬럼·마이그레이션은 DB 담당자가 별도로 제공한다.
+Backend는 컬럼을 자동 생성하거나 기존 코드를 개념별로 갱신하지 않는다. 컬럼 준비 전 concepts를 전송한 저장은 기존 503 규칙으로 처리한다.
 
 id, created_at, updated_at은 Database가 생성하므로 요청에 포함하지 않는다.
 
 ### 처리 순서
 
-1. 요청의 7개 필드를 검증한다.
+1. 기존 7개 필드와 선택 concepts를 검증한다.
 2. 코드 원문과 메타데이터를 저장하고 커밋한다.
 3. 저장된 코드 원문으로 E5 임베딩을 생성한다.
 4. 같은 ID의 행에 벡터와 처리 상태를 저장한 뒤 응답한다.
@@ -186,16 +191,19 @@ RAG 답변과 LLM 호출은 후속 단계에서 구현한다.
 | limit | integer | 선택 | 10 | 최대 결과 개수. 1~20 |
 | project | string | 선택 | 없음 | 앞뒤 공백 제거, 최대 200자. 대소문자 구분 |
 | language | string | 선택 | 없음 | 앞뒤 공백 제거·소문자 변환, 최대 200자 |
+| concept | string | 선택 | 없음 | 앞뒤 공백 제거, 최대 100자. concepts 배열 안의 개념 ID와 대소문자 구분해 일치 |
 
 - 질문은 앞뒤 공백을 제거한 후 처리하며, 빈 질문은 허용하지 않는다.
 - 질문 입력은 E5 접두사와 특수 토큰을 포함해 최대 512토큰이다.
 - 검색 대상은 embedding이 존재하고 영벡터가 아닌 행이다.
-- 조건을 생략하거나 공백만 보내면 해당 조건 없이 조회한다. 두 조건은 AND로 결합한다.
+- 조건을 생략하거나 공백만 보내면 해당 조건 없이 조회한다. 지정한 조건은 AND로 결합한다.
 - 프로젝트는 앞뒤 공백을 제거한 DB 이름과 대소문자를 구분해 일치시킨다. 언어는 DB 값도 앞뒤 공백 제거·소문자로 변환해 비교한다.
 - 존재하지 않는 조건은 HTTP 200과 빈 results를 반환한다.
 - 조건은 전체 검색 후보의 WHERE에 적용한 뒤 거리 정렬·Top-K를 수행한다. 기존 Top-K 안에서만 거르지 않는다.
 - 전체 검색 대상에서 조회하며 테스트용 id로 제한하지 않는다.
-- 응답 filters에는 실제 적용한 정규화 조건을 반환한다. 미지정 조건은 null이다.
+- 응답 filters에는 실제 적용한 정규화 조건을 반환한다. 미지정 project·language는 null이다. concept는 지정했을 때만 추가해 기존 무조건 검색 응답 모양을 유지한다.
+- concept는 WHERE의 `%s = ANY(concepts)`로 제한한 뒤 거리 정렬·LIMIT을 수행한다. 검색 결과의 기본 7개 필드·score는 유지한다.
+- DB concepts 컬럼이 없는데 concept를 지정하면 503이다. 조건을 무시한 검색이나 빈 결과 성공으로 바꾸지 않는다.
 - /ask는 이번 검색 조건을 받지 않으며 기존처럼 전체 DB에서 참고 자료를 찾는다.
 
 ### Success Response — HTTP 200
@@ -252,6 +260,7 @@ RAG 답변과 LLM 호출은 후속 단계에서 구현한다.
 - 접두사와 특수 토큰을 포함한 질문이 512토큰을 초과
 - limit이 정수가 아니거나 1~20 범위 밖인 경우
 - 정규화한 project 또는 language가 200자를 초과하는 경우
+- 정규화한 concept가 100자를 초과하는 경우
 
 오류는 detail 필드로 전달한다.
 파라미터 검증은 FastAPI 기본 오류 응답을 사용하고,
@@ -271,7 +280,7 @@ RAG 답변과 LLM 호출은 후속 단계에서 구현한다.
 
 ## 4. POST /ask
 
-기존 E5 질문 임베딩과 DB 검색 결과를 사용해 저장된 코드에 근거한 단일 답변을 만든다. 이 API만 답변 생성용 LLM을 호출한다. POST /snippets와 GET /search는 계속 LLM을 호출하지 않는다.
+기존 E5 질문 임베딩과 DB 검색 결과를 사용해 저장된 코드에 근거한 단일 답변을 만든다. 이 API와 아래 공부 AI API가 답변 생성용 LLM을 호출한다. POST /snippets와 GET /search는 계속 LLM을 호출하지 않는다.
 
 ### Request
 
@@ -565,3 +574,124 @@ DB 연결·삭제 실행·커밋 확인 실패를 성공이나 404로 바꾸지 
 성공 후 검색 결과·GET /filters·관련 로컬 기록·AI 답변 캐시를 갱신한다.
 기존의 로컬 기록 ✕와 DB 삭제를 별개의 동작으로 유지한다.
 상세 인수인계와 검증 범위는 [스니펫 삭제 안내](docs/SNIPPET_DELETION.md)를 따른다.
+
+## 7. POST /study/{mode} — 공부 AI
+
+사용자가 전달한 코드 한 조각에 대해 공부용 JSON을 생성한다. DB·Embedding·RAG 검색을 수행하지 않는다.
+모드는 explain, why, review, task, bug, translate, plain, lines, distractors, narrate다.
+narrate는 develop의 Extension llm.ts에 실제로 존재하는 실행 기록 해설 모드다. quiz는 이번 계약에 포함하지 않는다.
+
+### 공통 요청과 키
+
+```json
+{"code":"def add(a,b):\n    return a+b","language":"python","function_name":"add"}
+```
+
+- code: 공백뿐이 아닌 원문, 1~8,000자·최대 5,000줄. language: 1~40자. function_name: string 또는 null, 생략 가능·최대 200자.
+- 추가 입력과 응답 모양은 아래 표를 따른다. JSON 객체로 응답하며 별도 answer 래퍼나 SSE를 추가하지 않는다.
+- /ask와 동일하게 X-LLM-API-Key·X-LLM-Provider를 한 쌍으로 받는다. 제공자는 openai·anthropic·google이다.
+- 두 헤더가 없으면 기존 Backend의 서버 기본 OpenAI 키·모델을 사용한다. 개인 키 실패 후 서버 키로 자동 전환하지 않는다.
+- 모델 설정은 기존 Backend 설정을 따른다. Extension의 chatModel 설정이 이 요청으로 전달되는 것은 아니다.
+- 요청마다 최대 1회 생성, 처리 기한 30초, 출력 상한 4,096토큰. 요청·응답을 DB에 저장하지 않는다.
+- 프롬프트는 Extension llm.ts의 STUDY_SYSTEM·SHAPES·studyPrompt에 대응한다. 실제 파서와 대조하는 검사를 제공한다.
+
+| mode | 공통 요청 외 추가 필드 | HTTP 200 JSON의 최상위 필드 |
+|---|---|---|
+| explain | answer: 사용자가 쓴 설명, 1~8,000자 | points: [{verdict: ok/partial/wrong, text, lines}] |
+| why | 없음 | alternatives: [{label, code, speed, memory, readability, note}], complexity: {time, space, note}, deeper: [{title, text, doc}] |
+| review | 없음 | items: [{kind: good/fix/warn, title, text, lines}], improved_code |
+| task | 없음 | task, starter, tests: [{call, expected}] |
+| bug | 없음 | code, line, explain, fixed_line |
+| translate | target: 바꿀 언어, 1~40자 | language, code, notes: [{from, to, why}] |
+| plain | 없음 | one_line, analogy, use |
+| lines | 없음 | lines: [{line, plain}] |
+| distractors | call: 1~300자, answer: 정답 문자열 1~500자 | choices: 문자열 배열 |
+| narrate | call: 최대 300자, steps: 실행 기록 문자열 배열 1~400개·각 2,000자 이하 | summary, steps: 단계별 설명 문자열 배열 |
+
+최종 메시지 JSON은 80,000자 이하로 제한한다. 글자 수 제한을 토큰 측정값으로 표시하지 않는다.
+lines는 입력 코드 안의 1부터 시작하는 줄 번호다. bug.line은 생성된 bug.code 안의 줄 번호다.
+narrate의 응답 steps 개수는 요청과 같아야 한다. distractors는 정답을 포함하지 않고 서로 다른 보기여야 한다.
+응답은 타입·필수 필드·길이·줄 번호를 검사한 뒤 전달한다. 이 검사는 AI 설명이나 과제의 의미적 정답을 보장하지 않는다.
+
+### 오류
+
+| HTTP | detail.code | 의미 |
+|---|---|---|
+| 401 / 403 | llm_key_invalid / llm_key_forbidden | /ask와 같은 키·권한 오류 |
+| 422 | llm_provider_unsupported 또는 study_input_invalid | 제공자·요청 크기 오류. 필드·모드 검증은 FastAPI/Pydantic 기본 detail 배열도 사용 |
+| 502 | study_response_invalid | 미완료 응답, 잘못된 JSON·필드·줄 번호·보기 등 |
+| 503 | study_service_unavailable | 서버 기본 키·모델·제공자 연결 준비 실패 |
+| 504 | study_timeout | 공부 AI 응답 시간 초과 |
+
+오류 detail 객체는 {code, message}다. 키·제공자 예외 원문을 응답에 포함하지 않는다. 개인 키는 요청 종료 시 정리한다.
+
+## 8. POST /study/concepts — 개념 찾기
+
+공통 코드 요청에 known_ids: string[], concept_ids: string[]를 추가한다. 생략 시 []다.
+각 목록은 최대 200개, 각 ID는 1~100자다. known_ids는 Extension에서 규칙으로 감지한 개념 ID이고,
+concept_ids는 Extension이 알고 있는 전체 ID 목록이다. 모델에 제시하는 목록은 concept_ids와 Backend에 복사한 개념 이름을 사용한다.
+concept_ids가 비면 현재 Backend의 개념 목록을 사용한다. 키 헤더·기한·오류는 7절과 같다.
+
+```json
+{
+  "concepts": [{
+    "id":"condition", "name":"조건문", "level":1, "summary":"조건에 따라 실행해요.",
+    "in_this_code":"조건을 확인하는 부분에서 쓰여요.", "lines":[1], "prereq":[],
+    "misconception":"", "contrast":""
+  }]
+}
+```
+
+위 내용은 구조 예시다. level은 1·2·3, id는 알려진 ID 또는 null이다.
+응답 최대 12개, 같은 이름은 한 번만 남기며 알려지지 않은 id는 Extension의 parseAiConcepts처럼 null로 바꾼다.
+검출한 개념을 스니펫에 자동 저장하지 않는다. 저장은 선택 concepts 필드로 별도 요청한다.
+
+## 9. POST /study/trace · POST /study/run — 격리 실행
+
+LLM·DB를 호출하지 않는다. 기존 서버 환경에서 실행기를 명시적으로 활성화한 경우에만 실행한다.
+이미지가 없거나 Docker에 접근할 수 없으면 503이며 호스트 Python/Node 실행으로 대체하지 않는다.
+
+### 요청
+
+- trace: 공통 코드 요청 + call 문자열(1~300자).
+- run: 공통 코드 요청 + calls: 식 문자열 배열, tests: [{call, expected}]. 각각 최대 20개이며 둘 중 하나는 비어 있지 않아야 한다.
+- calls가 있으면 calls를 우선하고, 없으면 tests를 사용한다. expected는 Python repr 또는 JavaScript JSON.stringify 결과 문자열이다.
+- 지원 언어는 python·typescript·javascript다. TypeScript는 타입 제거 후 동기 함수 위주로 실행하며 타입 검사를 수행하지 않는다.
+- import가 필요한 TS 모듈, JSX, strip-only 변환이 지원하지 않는 TS 구문은 실행 실패로 처리한다.
+
+### 실행 환경
+
+요청마다 별도 컨테이너, 최대 5초·관측 단계 400개, 메모리 256MiB·CPU 1개·PID 32개 제한을 적용한다.
+네트워크 없음, 읽기 전용 파일 시스템, 비 root 사용자, 모든 capability 제거, 권한 상승 금지,
+호스트 폴더·DB·API 키·Docker socket 미전달을 적용한다. 임시 쓰기 영역은 16MiB다.
+실행 시간 초과 후 컨테이너 정리는 추가 시간이 필요할 수 있다. 요청당 stdout 4MB·stderr 64KB 수신 한도를 둔다.
+실행 슬롯은 Backend 프로세스당 2개다. 실행기의 이미지 준비와 활성화 방법은 [공부 Backend 안내](docs/STUDY_BACKEND.md)를 따른다.
+
+### HTTP 200 응답
+
+trace는 Extension follow.ts TRACER·study.ts의 TraceResult 형식이다.
+
+```json
+{"call":"add(1,2)","steps":[{"line":2,"say":"a = 1, b = 2","frames":[{"name":"add","vars":{"a":"1","b":"2"}}],"objects":[],"ret":""}],"truncated":false,"value":"3","stdout":""}
+```
+
+steps는 최대 400개다. 각 단계에 line, say, frames[{name,vars}], objects[{label,items,look,marks}], ret가 있으며
+TS/JS 단계는 col을 추가할 수 있다. 기록은 해당 줄 실행 직전의 값이다. 반환 이벤트는 반환 시점을 기록한다.
+실행 중 예외는 trace의 마지막 단계나 run의 case.error로 표시한다. 단계 한도에 도달한 trace는 truncated=true다.
+run은 다음과 같다.
+
+```json
+{"cases":[{"call":"add(1,2)","output":"3","error":"","expected":"3","ok":true}]}
+```
+
+expected가 없는 경우 ok는 null이다. 비교 방식은 기존 TRACER와 같이 공백을 제거한 표현 문자열 비교다.
+이 채점을 일반적인 프로그램 동치 검사로 취급하지 않는다. 위 JSON은 응답 구조 예시이며 새 측정값이 아니다.
+
+### 오류
+
+- 422 study_execution_input_invalid: 지원하지 않는 언어 또는 빈 호출 목록.
+- 422 study_execution_failed: 코드 로드·구문·결과 형식·출력 한도 등 실행 입력 문제.
+- 503 study_runner_unavailable: 비활성 실행기·이미지/Docker 미준비·실행 슬롯 부족·검증 불가능한 실행 결과.
+- 504 study_execution_timeout: 5초 제한으로 실행 중단.
+
+필드 타입·길이 오류는 기본 422 검증 응답을 사용한다. Docker stderr·서버 연결 정보·키를 응답에 포함하지 않는다.
