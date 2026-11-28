@@ -1023,7 +1023,8 @@ function mapPane() {
     det.append(h('div', { class: 'row', style: 'margin-top:8px' },
       c ? h('button', { type: 'button', class: 'lk', onclick: () => post('url', { url: c.doc }) }, '📄 공식 문서') : null,
       !sel.ai ? h('button', { type: 'button', class: 'btn', onclick: () => { if (S.study.known[sel.id] === 'known') {delete S.study.known[sel.id];} else {S.study.known[sel.id] = 'known';} post('study', { study: S.study }); render(); } }, S.study.known[sel.id] === 'known' ? '"아는 개념" 표시 지우기' : '이미 아는 개념이에요') : null,
-      h('button', { type: 'button', class: 'btn', onclick: () => askAbout(sel.name + ' 를 예제와 함께 쉽게 설명하고, 연습 문제 하나 내줘') }, '✦ 이 개념 배우기')));
+      h('button', { type: 'button', class: 'btn', onclick: () => askAbout(sel.name + ' 를 예제와 함께 쉽게 설명하고, 연습 문제 하나 내줘') }, '✦ 이 개념 배우기'),
+      !sel.ai ? h('button', { type: 'button', class: 'btn', title: '사이드바 검색에서 이 개념을 쓴 저장 코드만 찾아요', onclick: () => post('searchConcept', { id: sel.id, name: sel.name }) }, '🔍 이 개념 쓴 내 코드 찾기') : null));
     pane.append(det);
   }
   return pane;

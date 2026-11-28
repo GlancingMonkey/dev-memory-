@@ -1,7 +1,7 @@
 // logic.ts 단위 테스트 — VS Code 없이 돌아간다: npm run test:unit
 import * as assert from 'assert';
 import {
-  addUsage, adjustEndLine, groupDuplicates, parseDeleteResponse, canSendKey, guessProvider, maskKey, validateKey, evalToCsv, evalToMarkdown, EvalRow, parseEvalQuestions, rankOf, summarizeEval, compareSource, maskSecrets, scanSecrets, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
+  addUsage, adjustEndLine, groupDuplicates, parseDeleteResponse, canSendKey, guessProvider, maskKey, validateKey, evalToCsv, evalToMarkdown, EvalRow, parseEvalQuestions, rankOf, summarizeEval, compareSource, maskSecrets, scanSecrets, buildSearchUrl, checkAppliedFilter, errorDetailText, filterLocally, hasFilter, normalizeFilter, parseFilterOptions, answerToMarkdown, askCacheKey, AskError, buildAskRequest, endsWithQuestionMark, isVagueQuestion, localDateKey, parseSse, todayUsage, looksLikeQuestion, askErrorFor, clamp, extractCitations, findFunctionNameByRegex, formatSeconds, isStorageUnavailable, parseAskResponse, parseSaveResponse, pickSymbol, reindent, SaveUnconfirmedError, SimpleSymbol,
 } from '../logic';
 
 const linesOf = (src: string) => {
@@ -318,8 +318,9 @@ suite('AI 질문 부가 기능 — 이어서 묻기 · 한 글자씩 · 저장�
 
 suite('검색 필터 — GET /search?project=&language= · GET /filters', () => {
   test('조건 정리: 앞뒤 공백 제거, 언어만 소문자, 빈 값 = 조건 없음', () => {
-    assert.deepStrictEqual(normalizeFilter({ project: '  My-Proj ', language: ' Python ' }), { project: 'My-Proj', language: 'python' });
+    assert.deepStrictEqual(normalizeFilter({ project: '  My-Proj ', language: ' Python ' }), { project: 'My-Proj', language: 'python', concept: '' });
     assert.strictEqual(hasFilter(normalizeFilter({ project: '   ', language: '' })), false);
+    assert.strictEqual(hasFilter(normalizeFilter({ concept: ' loop ' })), true);
     assert.strictEqual(hasFilter(normalizeFilter(undefined)), false);
   });
   test('주소: 조건 없으면 예전과 같고, 있으면 붙인다 (한글·공백 인코딩)', () => {
@@ -342,6 +343,8 @@ suite('검색 필터 — GET /search?project=&language= · GET /filters', () => 
     assert.strictEqual(filterLocally(rows, normalizeFilter({ project: 'a' })).length, 2);
     assert.strictEqual(filterLocally(rows, normalizeFilter({ language: 'python' })).length, 2);
     assert.strictEqual(filterLocally(rows, normalizeFilter({ project: 'a', language: 'python' })).length, 1);
+    // 개념은 결과에 concepts 가 없으니 코드에서 찾은 개념으로 거른다
+    assert.strictEqual(filterLocally(rows, normalizeFilter({ concept: 'loop' }), (r) => (r.project_name === 'a' ? ['loop'] : [])).length, 2);
   });
   test('/filters: {name,count} 또는 이름 배열, 빈 이름·중복은 건너뜀', () => {
     const a = parseFilterOptions(JSON.stringify({ projects: [{ name: 'p1', count: 3 }, { name: 'p1', count: 1 }, { name: '' }], languages: ['python', 'go'] }));
@@ -557,5 +560,21 @@ suite('parseDeleteResponse — 저장 코드 삭제 응답', () => {
   });
   test('그 밖은 서버 사유를 붙여 오류', () => {
     assert.throws(() => parseDeleteResponse(500, '{"detail":{"code":"db","message":"DB 연결 실패"}}'), /HTTP 500.*DB 연결 실패/);
+  });
+});
+
+suite('개념 필터 — GET /search?concept= · POST /snippets concepts (PR #75)', () => {
+  test('주소에 개념 ID 를 붙이고, 응답 filters.concept 가 같아야 적용으로 본다', () => {
+    const f = normalizeFilter({ language: 'python', concept: 'list_comp' });
+    assert.strictEqual(new URL(buildSearchUrl('http://h', 'a', 5, f)).searchParams.get('concept'), 'list_comp');
+    assert.strictEqual(checkAppliedFilter(f, { project: null, language: 'python', concept: 'list_comp' }), 'applied');
+    assert.strictEqual(checkAppliedFilter(f, { project: null, language: 'python' }), 'ignored');
+    assert.strictEqual(checkAppliedFilter(normalizeFilter({ language: 'python' }), { project: null, language: 'python' }), 'applied');
+  });
+  test('개념을 뺀 재저장은 id 없는 503 일 때만', () => {
+    assert.strictEqual(isStorageUnavailable('{"detail":"Snippet storage unavailable"}', 503), true);
+    assert.strictEqual(isStorageUnavailable('{"id":7,"message":"snippet saved","embedding_status":null,"embedding_error":"embedding_storage_failed"}', 503), false);
+    assert.strictEqual(isStorageUnavailable('{"detail":"x"}', 500), false);
+    assert.strictEqual(isStorageUnavailable('<html>', 503), false);
   });
 });

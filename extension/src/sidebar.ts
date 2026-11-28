@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
 import { ProjectLocations, relativeSourceParts } from './projectLocations';
-import { buildConceptGraph, dueCards, STUDY_CONCEPTS, weeklyReport } from './study';
+import { buildConceptGraph, detectConcepts, dueCards, STUDY_CONCEPTS, weeklyReport } from './study';
 import { COUNTS_KEY, countConceptsInDb, openStudyNotes, readStudy, STUDY_KEY } from './studyHost';
 import { ConceptMapPanel } from './conceptMap';
 import { EditorFollower } from './follow';
 import {
-  addUsage, answerToMarkdown, askCacheKey, AskError, askErrorFor, AskResponse, AskSource, AskTurn, buildAskRequest, buildSearchUrl,
+  addUsage, answerToMarkdown, askCacheKey, AskError, askErrorFor, AskResponse, AskSource, AskTurn, buildAskRequest, buildSearchUrl, CONCEPT_MAX_LENGTH,
   canSendKey, checkAppliedFilter, clamp, compareSource, guessProvider, LLM_KEY_HEADER, LLM_PROVIDER_HEADER, LLM_PROVIDERS,
   LlmProvider, maskKey, validateKey, pickSymbol, SimpleSymbol, SourceState, EmbeddingStatus, endsWithQuestionMark, errorDetailText, FILTER_MAX_LENGTH, FilterCheck, filterLocally,
   FilterOptions, groupDuplicates, hasFilter, parseDeleteResponse, DeleteOutcome, isVagueQuestion, localDateKey, looksLikeQuestion, normalizeFilter, parseAskResponse, parseFilterOptions,
@@ -151,6 +151,12 @@ export class SearchError extends Error {
 export interface SearchOutcome {
   results: SearchResult[];
   check: FilterCheck;
+  conceptLocal?: boolean;   // 서버가 개념 조건을 아직 못 써서(DB 준비 전 503) 화면에서 코드로 판단해 걸렀다
+}
+
+// 검색 결과 코드에 쓰인 개념 ID — 서버가 개념 조건을 못 쓸 때 화면에서 거르는 데 쓴다
+function conceptIdsOf(r: SearchResult): string[] {
+  return detectConcepts(r.code || '', r.language, r.function_name, STUDY_CONCEPTS).map((h) => h.id);
 }
 
 export async function searchSnippets(query: string, filter: SearchFilter): Promise<SearchOutcome> {
@@ -159,7 +165,7 @@ export async function searchSnippets(query: string, filter: SearchFilter): Promi
   if (config.get<boolean>('mock', true)) {
     await new Promise((resolve) => setTimeout(resolve, 300));
     // mock 은 검색어와 상관없이 샘플. 필터는 서버처럼 먼저 걸러서 돌려준다
-    return { results: filterLocally(mockResults(), filter), check: hasFilter(filter) ? 'applied' : 'none' };
+    return { results: filterLocally(mockResults(), filter, conceptIdsOf), check: hasFilter(filter) ? 'applied' : 'none' };
   }
 
   // API_CONTRACT.md: GET /search?q=...&limit=N[&project=..&language=..] → { results: [...], filters?: {...} }
@@ -189,6 +195,11 @@ export async function searchSnippets(query: string, filter: SearchFilter): Promi
   } catch {
     data = undefined;
   }
+  // 개념 조건은 DB 에 concepts 컬럼이 생기기 전엔 503 — 조건 없이 다시 찾아 화면에서 거른다 (그렇다고 표시)
+  if (res.status === 503 && filter.concept) {
+    const rest = await searchSnippets(query, { ...filter, concept: '' });
+    return { results: rest.results.filter((r) => conceptIdsOf(r).includes(filter.concept)), check: 'ignored', conceptLocal: true };
+  }
   if (!res.ok) {
     const detail = errorDetailText(data) || text.slice(0, 300);
     if (res.status === 422) {
@@ -206,7 +217,7 @@ export async function searchSnippets(query: string, filter: SearchFilter): Promi
   const check = checkAppliedFilter(filter, (data as { filters?: unknown }).filters);
   // 옛 서버가 조건을 무시했으면 화면에서라도 거른다 (웹페이지가 "화면에서만 거름"으로 표시)
   const rows = results as SearchResult[];
-  return { results: check === 'ignored' ? filterLocally(rows, filter) : rows, check };
+  return { results: check === 'ignored' ? filterLocally(rows, filter, conceptIdsOf) : rows, check };
 }
 
 // 저장 직전 중복 확인 — 그 코드로 검색 한 번 (LLM 0회). 가장 비슷한 게 기준 이상이면 돌려준다
@@ -630,6 +641,7 @@ interface SavedSearch {
   results: SearchResult[];
   filter?: SearchFilter;
   check?: FilterCheck;
+  conceptLocal?: boolean;
 }
 const STATE_KEY = 'codeMemory.lastSearch';
 const RECENT_KEY = 'codeMemory.recentQueries';   // 최근 검색어 (최대 5개)
@@ -738,6 +750,7 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
 
   private view: vscode.WebviewView | undefined;
   private ready = false;                       // 웹페이지 스크립트가 메시지를 받을 준비가 됐는지
+  private pendingFilter: Partial<SearchFilter> | undefined;   // 그 검색의 범위 (개념 지도의 "이 개념 쓴 코드 찾기")
   private pendingQuery: string | undefined;    // 패널이 열리기 전에 들어온 "이걸로 검색해줘"
   private pendingFocus = false;                // 패널이 열리기 전에 들어온 "검색창에 커서"
   private searchGeneration = 0;
@@ -1005,8 +1018,9 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
   }
 
   // 저장 알림의 "검색에서 확인" → 패널을 열고 그 검색어로 바로 검색
-  public async searchFor(query: string): Promise<void> {
+  public async searchFor(query: string, filter?: Partial<SearchFilter>): Promise<void> {
     this.pendingQuery = query;
+    this.pendingFilter = filter;
     await vscode.commands.executeCommand(`${SearchViewProvider.viewId}.focus`);
     this.flush();
   }
@@ -1156,8 +1170,9 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     if (this.pendingQuery !== undefined) {
-      this.view.webview.postMessage({ type: 'runSearch', query: this.pendingQuery });
+      this.view.webview.postMessage({ type: 'runSearch', query: this.pendingQuery, filter: this.pendingFilter ?? null });
       this.pendingQuery = undefined;
+      this.pendingFilter = undefined;
     }
     if (this.pendingFocus) {
       this.view.webview.postMessage({ type: 'focus' });
@@ -1226,7 +1241,7 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
           const saved = this.state.get<SavedSearch>(STATE_KEY);
           if (this.pendingQuery === undefined && saved) {
             const results = await withLocalStatus(saved.results);
-            view.webview.postMessage({ type: 'restore', query: saved.query, results, filter: saved.filter ?? null, check: saved.check ?? 'none' });
+            view.webview.postMessage({ type: 'restore', query: saved.query, results, filter: saved.filter ?? null, check: saved.check ?? 'none', conceptLocal: !!saved.conceptLocal });
           }
           this.flush();
           break;
@@ -1238,17 +1253,17 @@ export class SearchViewProvider implements vscode.WebviewViewProvider {
           if (generation !== this.searchGeneration) { break; }
           view.webview.postMessage({ type: 'recent', items: this.recentView(this.readRecent()) });
           try {
-            if (filter.project.length > FILTER_MAX_LENGTH || filter.language.length > FILTER_MAX_LENGTH) {
-              throw new SearchError('검색 조건을 확인하세요', `프로젝트·언어 이름은 ${FILTER_MAX_LENGTH}자까지예요.`, 'server');
+            if (filter.project.length > FILTER_MAX_LENGTH || filter.language.length > FILTER_MAX_LENGTH || filter.concept.length > CONCEPT_MAX_LENGTH) {
+              throw new SearchError('검색 조건을 확인하세요', `프로젝트·언어 이름은 ${FILTER_MAX_LENGTH}자, 개념 ID 는 ${CONCEPT_MAX_LENGTH}자까지예요.`, 'server');
             }
-            const { results, check } = await searchSnippets(msg.query, filter);
+            const { results, check, conceptLocal } = await searchSnippets(msg.query, filter);
             if (generation !== this.searchGeneration) { break; }
             const localResults = await withLocalStatus(results);
             if (generation !== this.searchGeneration) { break; }
             view.webview.postMessage({
-              type: 'results', reqId: msg.reqId, query: msg.query, filter, check, results: localResults,
+              type: 'results', reqId: msg.reqId, query: msg.query, filter, check, conceptLocal: !!conceptLocal, results: localResults,
             });
-            await this.state.update(STATE_KEY, { query: msg.query, results, filter, check } satisfies SavedSearch);
+            await this.state.update(STATE_KEY, { query: msg.query, results, filter, check, conceptLocal: !!conceptLocal } satisfies SavedSearch);
           } catch (err) {
             if (generation !== this.searchGeneration) { break; }
             const title = err instanceof SearchError ? err.title : '검색 실패';
@@ -2056,6 +2071,7 @@ function getHtml(webview: vscode.Webview): string {
       <span class="flbl">범위</span>
       <button id="fProject" class="fchip" type="button"></button>
       <button id="fLanguage" class="fchip" type="button"></button>
+      <button id="fConcept" class="fchip" type="button"></button>
       <button id="fClear" class="link-btn fclear" type="button" hidden>모두 해제</button>
       <div id="fmenu" class="fmenu" hidden></div>
     </div>
@@ -2500,6 +2516,13 @@ function getHtml(webview: vscode.Webview): string {
         setDemo(msg.on === undefined ? !(prefs.demo && prefs.demo.on) : !!msg.on);
         break;
       case 'runSearch':
+        // 개념 지도의 "이 개념 쓴 코드 찾기"처럼 범위를 같이 주면 그 범위로 바꿔서 찾는다
+        if (msg.filter) {
+          sfilter = normFilter(Object.assign({}, sfilter, msg.filter));
+          prefs.filter = sfilter;
+          vscode.postMessage({ type: 'prefs', prefs: prefs });
+          renderChips();
+        }
         input.value = msg.query;
         updateMode();
         search(msg.query);
@@ -2510,7 +2533,7 @@ function getHtml(webview: vscode.Webview): string {
         break;
       case 'restore':
         lastQuery = msg.query;
-        setResults(msg.query, msg.results, true, msg.filter, msg.check);
+        setResults(msg.query, msg.results, true, msg.filter, msg.check, msg.conceptLocal);
         break;
       case 'sourceLocationsChanged': {
         const rows = (current ? current.results : []).concat(currentAnswer ? currentAnswer.r.sources : []);
@@ -2544,7 +2567,7 @@ function getHtml(webview: vscode.Webview): string {
         if (msg.reqId !== undefined && msg.reqId !== searchSeq) { break; }   // 범위를 바꾸기 전에 보낸 검색의 응답은 버린다
         setSearching(false);
         if (msg.query) { lastQuery = msg.query; }
-        setResults(lastQuery, msg.results, false, msg.filter, msg.check);
+        setResults(lastQuery, msg.results, false, msg.filter, msg.check, msg.conceptLocal);
         showSuggest(lastQuery);
         demoDone('search');
         if (filterOn(normFilter(msg.filter))) { demoDone('scope'); }
@@ -2972,8 +2995,8 @@ function getHtml(webview: vscode.Webview): string {
       box.append(d);
     };
     step(1, '질문을 숫자로', '"' + String(q).slice(0, 60) + '" 를 E5 모델이 숫자 묶음(벡터)으로 바꿔요. 저장한 코드도 저장할 때 같은 방식으로 바꿔 뒀어요.');
-    const scope = current && current.filter && (current.filter.project || current.filter.language)
-      ? [current.filter.project, current.filter.language].filter(Boolean).join(' · ') + ' 로 먼저 걸렀어요' : '범위 없이 저장한 코드 전체에서 찾았어요';
+    const scope = current && filterOn(current.filter)
+      ? scopeLabel(current.filter) + ' 로 먼저 걸렀어요' : '범위 없이 저장한 코드 전체에서 찾았어요';
     step(2, '범위', inAnswer ? 'AI 질문은 범위를 무시하고 전체에서 찾아요' : scope);
     const bars = el('div', 'why-bars');
     const list = inAnswer && currentAnswer ? currentAnswer.r.sources : rows;
@@ -3052,10 +3075,10 @@ function getHtml(webview: vscode.Webview): string {
     });
   }
 
-  function setResults(query, results, restored, usedFilter, check) {
+  function setResults(query, results, restored, usedFilter, check, conceptLocal) {
     dupOpen = {};
     current = {
-      query: query, restored: restored, filter: normFilter(usedFilter), check: check || 'none',
+      query: query, restored: restored, filter: normFilter(usedFilter), check: check || 'none', conceptLocal: !!conceptLocal,
       results: results.map(function (r, i) { return Object.assign({ rank: i + 1 }, r); }),
     };
     intro.hidden = true;
@@ -3070,13 +3093,14 @@ function getHtml(webview: vscode.Webview): string {
 
   // ── 검색 범위 (프로젝트·언어) — 서버에 조건으로 보내서 DB 에서 먼저 거른다 (GET /search?project=&language=)
   //    목록은 GET /filters. 고르면 마지막 검색어로 바로 다시 검색. 늦게 온 이전 결과는 번호(searchSeq)로 버린다
-  const fProjectBtn = byId('fProject'), fLanguageBtn = byId('fLanguage'), fClearBtn = byId('fClear');
+  const fProjectBtn = byId('fProject'), fLanguageBtn = byId('fLanguage'), fConceptBtn = byId('fConcept'), fClearBtn = byId('fClear');
   const fMenu = byId('fmenu'), fWarn = byId('fwarn'), fRow = byId('frow');
   const FILTER_KINDS = {
     project: { label: '프로젝트', icon: 'folder', btn: fProjectBtn, find: '프로젝트 찾기' },
     language: { label: '언어', icon: 'code', btn: fLanguageBtn, find: '언어 찾기' },
+    concept: { label: '개념', icon: 'spark', btn: fConceptBtn, find: '개념 찾기 (반복문, 재귀 …)' },
   };
-  let sfilter = { project: '', language: '' };   // 지금 고른 범위 (다음 검색에 쓴다)
+  let sfilter = { project: '', language: '', concept: '' };   // 지금 고른 범위 (다음 검색에 쓴다)
   let filterOpts = null;                          // GET /filters 결과 { projects, languages } — 없으면 null
   let filterErr = '';
   let openFolders = [];
@@ -3088,17 +3112,20 @@ function getHtml(webview: vscode.Webview): string {
     return {
       project: f && typeof f.project === 'string' ? f.project.trim() : '',
       language: f && typeof f.language === 'string' ? f.language.trim().toLowerCase() : '',
+      concept: f && typeof f.concept === 'string' ? f.concept.trim() : '',
     };
   }
-  function filterOn(f) { return !!(f && (f.project || f.language)); }
-  function scopeLabel(f) { return [f.project, f.language].filter(Boolean).join(' · '); }
+  function filterOn(f) { return !!(f && (f.project || f.language || f.concept)); }
+  // 개념은 ID 로 보내고 화면엔 이름으로
+  function conceptName(id) { const c = STUDY_CONCEPTS.find(function (x) { return x.id === id; }); return c ? c.name : id; }
+  function scopeLabel(f) { return [f.project, f.language, f.concept ? conceptName(f.concept) : ''].filter(Boolean).join(' · '); }
 
   function renderChips() {
     Object.keys(FILTER_KINDS).forEach(function (kind) {
       const k = FILTER_KINDS[kind];
       const v = sfilter[kind];
       const b = k.btn;
-      b.replaceChildren(icon(k.icon), el('span', 'fk', k.label), el('span', 'fv', v || '전체'));
+      b.replaceChildren(icon(k.icon), el('span', 'fk', k.label), el('span', 'fv', v ? (kind === 'concept' ? conceptName(v) : v) : '전체'));
       if (v) {
         const x = el('span', 'fx');
         x.title = k.label + ' 조건 해제';
@@ -3110,7 +3137,7 @@ function getHtml(webview: vscode.Webview): string {
       }
       b.classList.toggle('on', !!v);
       b.classList.toggle('open', menuKind === kind);
-      b.title = v ? k.label + ': ' + v + ' 에서만 검색 (눌러서 바꾸기)' : k.label + ' 전체에서 검색 (눌러서 고르기)';
+      b.title = v ? k.label + ': ' + (kind === 'concept' ? conceptName(v) : v) + ' 에서만 검색 (눌러서 바꾸기)' : k.label + ' 전체에서 검색 (눌러서 고르기)';
     });
     fClearBtn.hidden = !filterOn(sfilter);
   }
@@ -3124,14 +3151,21 @@ function getHtml(webview: vscode.Webview): string {
     if (lastQuery) { search(lastQuery, { force: true }); }   // 바꾼 범위로 바로 다시 검색
   }
   fClearBtn.addEventListener('click', function () {
-    sfilter = { project: '', language: '' };
+    sfilter = { project: '', language: '', concept: '' };
     prefs.filter = sfilter;
     vscode.postMessage({ type: 'prefs', prefs: prefs });
     renderChips();
     if (lastQuery) { search(lastQuery, { force: true }); }
   });
 
+  // 개념 목록은 확장에 들어 있는 개념 ID 목록 (언어를 골랐으면 그 언어 개념만)
+  const LANG_KEY = { python: 'py', javascript: 'js', javascriptreact: 'js', typescript: 'ts', typescriptreact: 'ts' };
   function optionsOf(kind) {
+    if (kind === 'concept') {
+      const lk = LANG_KEY[sfilter.language];
+      return STUDY_CONCEPTS.filter(function (c) { return !lk || c.langs.indexOf(lk) >= 0; })
+        .map(function (c) { return { name: c.name, value: c.id, count: null, open: false }; });
+    }
     if (!filterOpts) { return []; }
     const list = (kind === 'project' ? filterOpts.projects : filterOpts.languages) || [];
     const items = list.map(function (o) { return { name: o.name, count: o.count, open: kind === 'project' && openFolders.indexOf(o.name) >= 0 }; });
@@ -3159,6 +3193,7 @@ function getHtml(webview: vscode.Webview): string {
   }
   fProjectBtn.addEventListener('click', function () { openFilterMenu('project'); });
   fLanguageBtn.addEventListener('click', function () { openFilterMenu('language'); });
+  fConceptBtn.addEventListener('click', function () { openFilterMenu('concept'); });
   document.addEventListener('mousedown', function (e) {
     if (menuKind && !fRow.contains(e.target)) { closeFilterMenu(); }
   });
@@ -3207,14 +3242,15 @@ function getHtml(webview: vscode.Webview): string {
     }
     const all = optionsOf(menuKind);
     const lower = q.toLowerCase();
-    const shown = all.filter(function (o) { return !q || o.name.toLowerCase().indexOf(lower) >= 0; });
-    shown.forEach(function (o) { add(o.name, o.name, o); });
+    const shown = all.filter(function (o) { return !q || o.name.toLowerCase().indexOf(lower) >= 0 || (o.value && o.value.indexOf(lower) >= 0); });
+    shown.forEach(function (o) { add(o.name, o.value || o.name, o); });
     const exact = all.some(function (o) { return o.name === q || (menuKind === 'language' && o.name.toLowerCase() === lower); });
-    if (q && !exact) {
+    if (q && !exact && menuKind !== 'concept') {
       add('"' + q + '" 직접 입력', q, null);
     }
     let foot = '';
-    if (filterErr) { foot = filterErr + ' · 이름을 직접 입력할 수 있어요'; }
+    if (menuKind === 'concept') { foot = '저장할 때 코드에서 찾은 개념으로 걸러요' + (sfilter.language ? ' · ' + sfilter.language + ' 개념만' : ''); }
+    else if (filterErr) { foot = filterErr + ' · 이름을 직접 입력할 수 있어요'; }
     else if (!filterOpts) { foot = '목록 불러오는 중…'; }
     else if (!all.length) { foot = 'DB 에 저장된 ' + k.label + '가 없어요'; }
     else { foot = 'DB 에 저장된 ' + k.label + ' · 숫자는 코드 수' + (mode.mock ? ' (mock 예시)' : ''); }
@@ -3232,7 +3268,10 @@ function getHtml(webview: vscode.Webview): string {
   function renderFilterWarn() {
     const ignored = !!current && current.check === 'ignored';
     fWarn.hidden = !ignored;
-    if (ignored) {
+    if (ignored && current.conceptLocal) {
+      fWarn.replaceChildren(el('b', '', '서버가 아직 개념 조건을 못 써요'),
+        document.createTextNode(' — DB 에 개념 칸이 준비되기 전이라, 다른 조건으로 찾은 결과를 코드 모양으로 판단해 화면에서 걸렀어요.'));
+    } else if (ignored) {
       fWarn.replaceChildren(el('b', '', '서버가 범위 조건을 적용하지 않았어요'),
         document.createTextNode(' — 응답에 적용한 조건(filters)이 없어서, 전체 검색 결과를 화면에서만 걸렀어요. Backend 버전을 확인하세요.'));
     }
@@ -3302,6 +3341,9 @@ function getHtml(webview: vscode.Webview): string {
     if (f.project && f.language) {
       btns.append(sbtn('언어만 풀기', false, function () { setFilter('language', ''); }));
       btns.append(sbtn('프로젝트만 풀기', false, function () { setFilter('project', ''); }));
+    }
+    if (f.concept && (f.project || f.language)) {
+      btns.append(sbtn('개념만 풀기', false, function () { setFilter('concept', ''); }));
     }
     s.append(btns);
     return s;
