@@ -507,19 +507,23 @@ export function isVagueQuestion(q: string): boolean {
 // ── 10. 검색 필터 — GET /search?project=&language= · GET /filters (팀 합의 #38 #39 #40)
 //    project: 저장된 이름 그대로(대소문자 구분) · language: 소문자 · 빈 값 = 조건 없음 · 둘 다면 AND
 //    서버는 실제 적용한 조건을 응답 filters 로 돌려준다. 없으면 옛 서버라 조건이 무시된 것
+//    concept: 개념 ID (loop · list_comp …) — 저장할 때 보낸 concepts 배열에 그 ID 가 있는 것만 (PR #75)
 export interface SearchFilter {
   project: string;
   language: string;
+  concept: string;
 }
 export const FILTER_MAX_LENGTH = 200;
+export const CONCEPT_MAX_LENGTH = 100;
 
 export function normalizeFilter(f: Partial<SearchFilter> | null | undefined): SearchFilter {
   const project = typeof f?.project === 'string' ? f.project.trim() : '';
   const language = typeof f?.language === 'string' ? f.language.trim().toLowerCase() : '';
-  return { project, language };
+  const concept = typeof f?.concept === 'string' ? f.concept.trim() : '';
+  return { project, language, concept };
 }
 export function hasFilter(f: SearchFilter): boolean {
-  return f.project !== '' || f.language !== '';
+  return f.project !== '' || f.language !== '' || f.concept !== '';
 }
 
 // GET /search 주소. 조건은 있을 때만 붙인다 (없으면 예전 주소와 똑같다)
@@ -530,6 +534,9 @@ export function buildSearchUrl(baseUrl: string, q: string, limit: number, filter
   }
   if (filter.language) {
     params.set('language', filter.language);
+  }
+  if (filter.concept) {
+    params.set('concept', filter.concept);
   }
   return `${baseUrl.replace(/\/+$/, '')}/search?${params.toString()}`;
 }
@@ -547,13 +554,31 @@ export function checkAppliedFilter(requested: SearchFilter, responseFilters: unk
   const got = normalizeFilter({
     project: (responseFilters as { project?: unknown }).project as string | undefined,
     language: (responseFilters as { language?: unknown }).language as string | undefined,
+    concept: (responseFilters as { concept?: unknown }).concept as string | undefined,
   });
-  return got.project === requested.project && got.language === requested.language ? 'applied' : 'ignored';
+  return got.project === requested.project && got.language === requested.language && got.concept === requested.concept ? 'applied' : 'ignored';
 }
 
 // 서버가 조건을 무시했을 때 화면에서라도 거른다 (표시는 "화면에서만 거름")
-export function filterLocally<T extends { project_name: string | null; language: string }>(rows: T[], f: SearchFilter): T[] {
-  return rows.filter((r) => (!f.project || r.project_name === f.project) && (!f.language || r.language.toLowerCase() === f.language));
+//   개념은 결과에 저장된 concepts 가 없으니 conceptsOf(코드에서 찾은 개념 ID)로 판단한다
+export function filterLocally<T extends { project_name: string | null; language: string }>(rows: T[], f: SearchFilter,
+  conceptsOf?: (row: T) => string[]): T[] {
+  return rows.filter((r) => (!f.project || r.project_name === f.project) && (!f.language || r.language.toLowerCase() === f.language)
+    && (!f.concept || !conceptsOf || conceptsOf(r).includes(f.concept)));
+}
+
+// 개념을 붙인 저장이 "원문 저장 자체가 안 됨(503, id 없음)"으로 끝났는지 — DB 에 concepts 컬럼이 아직 없을 때.
+//   이때만 개념을 빼고 한 번 더 보낸다. id 가 있는 503(검색 준비만 실패)은 이미 저장된 것이라 다시 보내면 안 된다
+export function isStorageUnavailable(text: string, httpStatus: number): boolean {
+  if (httpStatus !== 503) {
+    return false;
+  }
+  try {
+    const data = JSON.parse(text) as unknown;
+    return !data || typeof data !== 'object' || typeof (data as { id?: unknown }).id !== 'number';
+  } catch {
+    return false;
+  }
 }
 
 // GET /filters → { projects: [{name, count}], languages: [{name, count}] }  (이름 배열만 와도 된다)

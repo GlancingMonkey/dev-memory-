@@ -33,6 +33,7 @@ interface Deps {
   studyChanged: () => void;            // 사이드바 오늘 복습 · 개념 지도 다시 그리기
   log: (line: string) => void;         // 출력 > Code Memory
   demoDone: (id: string) => void;      // 시연 모드 순서 자동 체크
+  searchConcept: (name: string, id: string) => Promise<void>;   // 사이드바 검색을 그 개념 범위로
 }
 
 export class CodeMemoryHub {
@@ -278,6 +279,10 @@ export class CodeMemoryHub {
       }
       case 'url':
         if (typeof m.url === 'string' && /^https:\/\//.test(m.url)) { await vscode.env.openExternal(vscode.Uri.parse(m.url)); }
+        break;
+      case 'searchConcept':
+        // 개념 지도 → 그 개념을 쓴 저장 코드를 사이드바에서 (GET /search?concept=)
+        if (typeof m.id === 'string' && typeof m.name === 'string') { await this.d.searchConcept(m.name, m.id); }
         break;
       case 'popout':
         if (await this.hasCommand('workbench.action.moveEditorToNewWindow')) {

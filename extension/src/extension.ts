@@ -5,9 +5,10 @@ import { ChatController } from './chat';
 import { CodeMemoryHub } from './hub';
 import { ProjectLocations } from './projectLocations';
 import {
-  adjustEndLine, clamp, EmbeddingStatus, findFunctionNameByRegex, formatSeconds, maskSecrets, parseSaveResponse, pickSymbol, SaveUnconfirmedError,
-  scanSecrets, SimpleSymbol,
+  adjustEndLine, clamp, EmbeddingStatus, findFunctionNameByRegex, formatSeconds, isStorageUnavailable, maskSecrets, parseSaveResponse, pickSymbol,
+  SaveUnconfirmedError, scanSecrets, SimpleSymbol,
 } from './logic';
+import { detectConcepts, STUDY_CONCEPTS } from './study';
 
 // 저장 전 비밀값 확인 때 에디터에 표시하는 노란 물결
 const secretDecoration = vscode.window.createTextEditorDecorationType({
@@ -216,6 +217,9 @@ interface SaveResult {
   embeddingError?: string | null;
 }
 
+// DB 에 concepts 컬럼이 없다고 확인되면 이번 실행 동안 개념을 보내지 않는다
+let conceptsUnsupported = false;
+
 async function postSnippet(snippet: Snippet): Promise<SaveResult> {
   const config = vscode.workspace.getConfiguration('codeMemory');
   const started = Date.now();
@@ -230,7 +234,7 @@ async function postSnippet(snippet: Snippet): Promise<SaveResult> {
   const timeoutSec = clamp(config.get<number>('saveTimeoutSeconds'), 1, 300, 10);
 
   // 계약의 7개 필드만 골라서 보낸다 (객체를 통째로 넘기지 않는다)
-  const body = {
+  const body: Record<string, unknown> = {
     project_name: snippet.project_name,
     file_path: snippet.file_path,
     language: snippet.language,
@@ -239,27 +243,42 @@ async function postSnippet(snippet: Snippet): Promise<SaveResult> {
     end_line: snippet.end_line,
     code: snippet.code,
   };
+  // 코드에 쓰인 개념 ID (loop · list_comp …) — 개념별 검색용 (PR #75 의 선택 필드 concepts)
+  const concepts = conceptsUnsupported ? [] : detectConcepts(snippet.code, snippet.language, snippet.function_name, STUDY_CONCEPTS).map((h) => h.id);
+  if (concepts.length) {
+    body.concepts = concepts;
+  }
 
-  let res: Response;
-  let text: string;
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutSec * 1000),
-    });
-    text = await res.text();   // 응답 본문을 읽는 중의 시간 초과도 같은 안내로 처리한다.
-  } catch (err) {
-    // 시간 초과: 서버는 이미 저장했을 수 있다 → 다시 보내지 말고 확인부터 하게 안내
-    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-      throw new SaveUnconfirmedError(
-        `응답 시간 초과 (${timeoutSec}초). 서버에는 저장됐을 수 있습니다`
-      );
+  const send = async (payload: Record<string, unknown>): Promise<{ res: Response; text: string }> => {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(timeoutSec * 1000),
+      });
+      return { res, text: await res.text() };   // 응답 본문을 읽는 중의 시간 초과도 같은 안내로 처리한다.
+    } catch (err) {
+      // 시간 초과: 서버는 이미 저장했을 수 있다 → 다시 보내지 말고 확인부터 하게 안내
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new SaveUnconfirmedError(
+          `응답 시간 초과 (${timeoutSec}초). 서버에는 저장됐을 수 있습니다`
+        );
+      }
+      // 응답을 받지 못했다는 이유만으로 서버에 저장되지 않았다고 단정하지 않는다.
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new SaveUnconfirmedError(`저장 응답을 받지 못했습니다: ${url} (${reason})`);
     }
-    // 응답을 받지 못했다는 이유만으로 서버에 저장되지 않았다고 단정하지 않는다.
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new SaveUnconfirmedError(`저장 응답을 받지 못했습니다: ${url} (${reason})`);
+  };
+
+  let { res, text } = await send(body);
+  let conceptNote = concepts.length ? ` · 개념 ${concepts.join(', ')}` : '';
+  // DB 에 concepts 컬럼이 아직 없으면 저장 자체가 503(id 없음) → 개념을 빼고 한 번만 다시 보낸다.
+  //   이번 실행 동안은 개념을 더 보내지 않는다 (DB 준비 후 VS Code 를 다시 열면 다시 보냄)
+  if (concepts.length && isStorageUnavailable(text, res.status)) {
+    conceptsUnsupported = true;
+    ({ res, text } = await send({ ...body, concepts: undefined }));
+    conceptNote = ' · 서버가 개념 저장을 아직 못 해서 개념 없이 저장';
   }
 
   const elapsedMs = Date.now() - started;
@@ -268,7 +287,7 @@ async function postSnippet(snippet: Snippet): Promise<SaveResult> {
   return {
     id: parsed.id,
     mock: false,
-    detail: `POST ${url} → HTTP ${res.status} ${text} (${formatSeconds(elapsedMs)})`,
+    detail: `POST ${url} → HTTP ${res.status} ${text} (${formatSeconds(elapsedMs)})${conceptNote}`,
     elapsedMs,
     embedding: parsed.embedding,
     embeddingError: parsed.embeddingError,
@@ -539,6 +558,7 @@ export async function activate(context: vscode.ExtensionContext) {
     follower: () => searchProvider.follower,
     studyChanged: () => searchProvider.refreshStudy(),
     log: (line) => output.appendLine(`[${new Date().toLocaleTimeString()}] ${line}`),
+    searchConcept: (name, id) => searchProvider.searchFor(name, { concept: id }),
   });
   searchProvider.setHubOpener((item, tab) => hub.open(item, tab));
   context.subscriptions.push(
